@@ -228,8 +228,8 @@ We use the [Conventional Commits](https://www.conventionalcommits.org/) specific
 |---|---|---|
 | Player Service | https://github.com/mihaelaaa-23/player-service | `services/player-service` |
 | Server Moderation Session Service | https://github.com/mihaelaaa-23/server-moderation-session-service | `services/server-moderation-session-service` |
-| Applicant Service | | |
-| Credential Service | | |
+| Applicant Service | https://github.com/ciprik13/applicant-service | `services/applicant-service` |
+| Credential Service | https://github.com/ciprik13/credential-service | `services/credential-service` |
 | Server Rules Service | | |
 | University Record Service | | |
 | Moderation Service | | |
