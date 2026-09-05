@@ -45,10 +45,16 @@ Owns the lifecycle of an active moderation shift — one Moderator plus several 
 This service does **not** store any persistent player data (accounts, XP, friends — that's Player Service), nor does it own applicant, credential, or rule data. It coordinates a shift by pulling in information from Applicant Service, Credential Service, Server Rules Service, and University Record Service as each applicant comes through.
 
 ### Applicant Service
-_TODO Ciprian_
+
+Owns the people attempting to access the Discord server. It generates applicants with attributes such as name, student ID, major, year, university status, courses, and role (student, teaching assistant, staff, alumnus, or outsider). Some applicants are deliberately generated with false information or as impersonation attempts. If it's the first service contacted for a new applicant, it initializes that applicant's profile and propagates the relevant data to Credential Service and University Record Service; otherwise, it builds its own record from whichever service initialized the applicant first.
+
+It does **not** own credential documents (Credential Service) or hidden university records (University Record Service), and it does **not** decide whether an applicant is admitted (Moderation Service).
 
 ### Credential Service
-_TODO Ciprian_
+
+Owns the documents and credentials an applicant presents — student ID, university email, enrollment confirmation, course registration, and similar. Credentials can be expired, forged, inconsistent, or incomplete. It validates the structure and authenticity of what's presented, but it does not decide whether the applicant should be let in. Like Applicant Service, whichever of the two is contacted first for a new applicant initializes the shared data and propagates it to the other.
+
+It does **not** own the applicant's general profile (Applicant Service) or the actual admission decision (Moderation Service).
 
 ### Server Rules Service
 _TODO Ion_
@@ -117,10 +123,16 @@ Database-per-service: each service owns its own database, and no service reads a
 | POST | /sessions/{id}/end | — | `{sessionId: string, result: string, score: int}` |
  
 #### Applicant Service
-_TODO Ciprian_
+| Method | Path | Request | Response |
+|---|---|---|---|
+| POST | /applicants/generate | — | `{applicantId: string, name: string, studentId: string, major: string, year: int, role: string, status: string}` |
+| GET | /applicants/{id} | — | `{applicantId: string, name: string, studentId: string, major: string, year: int, role: string, status: string}` |
  
 #### Credential Service
-_TODO Ciprian_
+| Method | Path | Request | Response |
+|---|---|---|---|
+| GET | /credentials/{applicantId} | — | `{applicantId: string, studentIdCard: string, universityEmail: string, valid: boolean, issues: string[]}` |
+| POST | /credentials/{applicantId}/validate | — | `{applicantId: string, valid: boolean, issues: string[]}` |
  
 #### Server Rules Service
 _TODO Ion_
