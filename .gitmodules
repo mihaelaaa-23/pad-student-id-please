@@ -4,3 +4,9 @@
 [submodule "services/server-moderation-session-service"]
 	path = services/server-moderation-session-service
 	url = https://github.com/mihaelaaa-23/server-moderation-session-service.git
+[submodule "services/applicant-service"]
+	path = services/applicant-service
+	url = https://github.com/ciprik13/applicant-service.git
+[submodule "services/credential-service"]
+	path = services/credential-service
+	url = https://github.com/ciprik13/credential-service.git
