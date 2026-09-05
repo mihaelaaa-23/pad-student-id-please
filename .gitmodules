@@ -1,0 +1,6 @@
+[submodule "services/player-service"]
+	path = services/player-service
+	url = https://github.com/mihaelaaa-23/player-service.git
+[submodule "services/server-moderation-session-service"]
+	path = services/server-moderation-session-service
+	url = https://github.com/mihaelaaa-23/server-moderation-session-service.git
