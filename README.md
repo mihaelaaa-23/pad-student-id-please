@@ -258,7 +258,7 @@ We use the [Conventional Commits](https://www.conventionalcommits.org/) specific
 | Server Rules Service | https://github.com/ion190/server-rules-service | `services/server-rules-service` |
 | University Record Service | https://github.com/ion190/university-record-service | `services/university-record-service` |
 | Moderation Service | https://github.com/D3adeYe69/Moderation-Service | `services/moderation-service` |
-| Discord DMs Service | https://github.com/D3adeYe69/Discord-DMs-Service `services/discord-dms-service` |
+| Discord DMs Service | https://github.com/D3adeYe69/Discord-DMs-Service | `services/discord-dms-service` |
 
 ## Project Board
 
