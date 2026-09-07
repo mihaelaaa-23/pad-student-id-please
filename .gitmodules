@@ -16,3 +16,9 @@
 [submodule "services/discord-dms-service"]
 	path = services/discord-dms-service
 	url = https://github.com/D3adeYe69/Discord-DMs-Service
+[submodule "services/server-rules-service"]
+	path = services/server-rules-service
+	url = https://github.com/ion190/server-rules-service.git
+[submodule "services/university-record-service"]
+	path = services/university-record-service
+	url = https://github.com/ion190/university-record-service.git
