@@ -57,10 +57,16 @@ Owns the documents and credentials an applicant presents — student ID, univers
 It does **not** own the applicant's general profile (Applicant Service) or the actual admission decision (Moderation Service).
 
 ### Server Rules Service
-_TODO Ion_
+
+Owns the current access rules for the Discord server — rules that can change between shifts and grow arbitrarily complex (e.g. "only FAF students may join," "first-years can't access certain channels," "previously banned students are never re-admitted"). Its core job is evaluating a given applicant against whatever the current rule set is.
+
+It does **not** store applicant data itself (Applicant Service), university records (University Record Service), or make the final Accept/Reject/Flag/Ban call (Moderation Service) — it only reports whether an applicant passes or fails the current rules.
 
 ### University Record Service
-_TODO Ion_
+
+Owns the hidden university information moderators may need to verify an applicant: enrollment lists, Outlook group/email lists, current course catalog, academic year, and semester schedule. This information is deliberately fragmented across Junior Moderator players — one might see the enrollment list, another the message records — and the service must enforce that players can't access records they weren't assigned to see. As with Applicant/Credential Service, whichever service is contacted first for a new applicant initializes the record and propagates it onward.
+
+It does **not** own the applicant's public profile (Applicant Service) or credentials (Credential Service), and it does not enforce server rules itself (Server Rules Service).
 
 ### Moderation Service
 Provides real-time communication between the Moderator and Junior Moderators during a session, through a Discord-like WebSocket interface. It manages channels tied to the current moderation session (e.g. #enrollment-check, #faculty-check, #course-registration, #general-mod-chat), with different players able to access different channels depending on what information they've been assigned.
@@ -139,16 +145,31 @@ Database-per-service: each service owns its own database, and no service reads a
 | POST | /credentials/{applicantId}/validate | — | `{applicantId: string, valid: boolean, issues: string[]}` |
  
 #### Server Rules Service
-_TODO Ion_
- 
+
+| Method | Path | Request | Response |
+|---|---|---|---|
+| GET | /rules/current | — | `{rules: [{id: string, description: string}]}` |
+| POST | /rules/evaluate | `{applicantId: string}` | `{passed: boolean, violatedRules: string[]}` |
+
 #### University Record Service
-_TODO Ion_
+
+| Method | Path | Request | Response |
+|---|---|---|---|
+| GET | /records/{applicantId} | `{requestingPlayerId: string}` | `{applicantId: string, fields: object}` (scoped to player's access) |
  
 #### Moderation Service
-_TODO Liviu_
+
+| Method | Path | Request | Response |
+|---|---|---|---|
+| POST | /moderation/decide | `{sessionId: string, applicantId: string, decision: string}` | `{decisionId: string, correct: boolean, violatedRules: string[], penalty: int}` |
+| GET | /moderation/{decisionId} | — | `{decisionId: string, applicantId: string, decision: string, correct: boolean, violatedRules: string[], penalty: int}` |
  
 #### Discord DMs Service
-_TODO Liviu_
+
+| Method | Path | Request | Response |
+|---|---|---|---|
+| WS | /ws/sessions/{id}/channels/{channel} | `{senderId: string, content: string}` | broadcasts `{senderId: string, content: string, timestamp: string}` |
+| GET | /sessions/{id}/channels | — | `{channels: string[]}` (visible to requesting player) |
 
 ## Development Guidelines
  
