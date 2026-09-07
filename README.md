@@ -257,8 +257,8 @@ We use the [Conventional Commits](https://www.conventionalcommits.org/) specific
 | Credential Service | https://github.com/ciprik13/credential-service | `services/credential-service` |
 | Server Rules Service | | |
 | University Record Service | | |
-| Moderation Service | | |
-| Discord DMs Service | | |
+| Moderation Service | https://github.com/D3adeYe69/Moderation-Service | `services/moderation-service` |
+| Discord DMs Service | https://github.com/D3adeYe69/Discord-DMs-Service `services/discord-dms-service` |
 
 ## Project Board
 
