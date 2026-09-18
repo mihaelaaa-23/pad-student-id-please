@@ -36,11 +36,15 @@ A Discord-server-moderation game: applicants (students, professors, alumni, outs
 
 Responsible for the identity and progression of the players who take part in moderation shifts. It owns player accounts, authentication credentials, and public profiles (moderator handle, avatar), along with the player's friends list used to team up before a shift. It also owns XP and leveling — players gain experience from completed shifts, correct decisions, and any disciplinary actions taken against them, and level up over time based on this history.
 
+**Database:** PostgreSQL (`player_service_db`) — player accounts, credentials, and XP/level history are relational and benefit from foreign-key integrity between players and their friends list.
+
 Player Service does **not** own any moderation-session state (that belongs to Server Moderation Session Service), nor any information about the applicants trying to join the Discord server (owned by Applicant Service). It communicates with Server Moderation Session Service to let players join available sessions and receives shift results at the end of each session to update XP and levels accordingly.
 
 ### Server Moderation Session Service
 
 Owns the lifecycle of an active moderation shift — one Moderator plus several Junior Moderators working a shift together. It is responsible for creating and joining sessions, assigning the Moderator/Junior Moderator roles, and starting/ending shifts. It tracks the current applicant being reviewed, how many applications have been processed so far, and a running session score with any penalties incurred during the shift. At the end of a shift, it determines the overall session result and publishes it so Player Service can update player progression.
+
+**Database:** PostgreSQL (`session_service_db`) — session/shift records are structured and short-lived, with clear relational links between a session, its participants, and its running score.
 
 This service does **not** store any persistent player data (accounts, XP, friends — that's Player Service), nor does it own applicant, credential, or rule data. It coordinates a shift by pulling in information from Applicant Service, Credential Service, Server Rules Service, and University Record Service as each applicant comes through.
 
@@ -48,11 +52,15 @@ This service does **not** store any persistent player data (accounts, XP, friend
 
 Owns the people attempting to access the Discord server. It generates applicants with attributes such as name, student ID, major, year, university status, courses, and role (student, teaching assistant, staff, alumnus, or outsider). Some applicants are deliberately generated with false information or as impersonation attempts. If it's the first service contacted for a new applicant, it initializes that applicant's profile and propagates the relevant data to Credential Service and University Record Service; otherwise, it builds its own record from whichever service initialized the applicant first.
 
+**Database:** MongoDB (`applicant_service_db`) — applicant profiles vary in shape by role (student vs. outsider vs. alumnus), which suits a flexible document schema better than a fixed relational one.
+
 It does **not** own credential documents (Credential Service) or hidden university records (University Record Service), and it does **not** decide whether an applicant is admitted (Moderation Service).
 
 ### Credential Service
 
 Owns the documents and credentials an applicant presents — student ID, university email, enrollment confirmation, course registration, and similar. Credentials can be expired, forged, inconsistent, or incomplete. It validates the structure and authenticity of what's presented, but it does not decide whether the applicant should be let in. Like Applicant Service, whichever of the two is contacted first for a new applicant initializes the shared data and propagates it to the other.
+
+**Database:** MongoDB (`credential_service_db`) — credential documents differ by type (ID card, email confirmation, enrollment letter) and are naturally stored as loosely-structured documents rather than fixed columns.
 
 It does **not** own the applicant's general profile (Applicant Service) or the actual admission decision (Moderation Service).
 
@@ -60,16 +68,22 @@ It does **not** own the applicant's general profile (Applicant Service) or the a
 
 Owns the current access rules for the Discord server — rules that can change between shifts and grow arbitrarily complex (e.g. "only FAF students may join," "first-years can't access certain channels," "previously banned students are never re-admitted"). Its core job is evaluating a given applicant against whatever the current rule set is.
 
+**Database:** MongoDB (`server_rules_service_db`) — rules are arbitrarily nested conditions that don't map cleanly to fixed columns, so a document store keeps rule definitions flexible as they grow more complex.
+
 It does **not** store applicant data itself (Applicant Service), university records (University Record Service), or make the final Accept/Reject/Flag/Ban call (Moderation Service) — it only reports whether an applicant passes or fails the current rules.
 
 ### University Record Service
 
 Owns the hidden university information moderators may need to verify an applicant: enrollment lists, Outlook group/email lists, current course catalog, academic year, and semester schedule. This information is deliberately fragmented across Junior Moderator players — one might see the enrollment list, another the message records — and the service must enforce that players can't access records they weren't assigned to see. As with Applicant/Credential Service, whichever service is contacted first for a new applicant initializes the record and propagates it onward.
 
+**Database:** PostgreSQL (`university_record_db`) — enrollment lists, course catalogs, and semester schedules are inherently relational (students ↔ courses ↔ semesters), and per-field access scoping is easier to enforce with relational constraints.
+
 It does **not** own the applicant's public profile (Applicant Service) or credentials (Credential Service), and it does not enforce server rules itself (Server Rules Service).
 
 ### Moderation Service
 Owns the actual admission decision for each applicant. The Moderator chooses Accept, Reject, Flag (for further investigation), or Ban, and the service gathers the relevant information from Applicant, Credential, Server Rules, and University Record Services to determine whether the decision was correct under the current rules. It records the applicant, the decision made, any rules violated, penalties applied, and the outcome.
+
+**Database:** PostgreSQL (`moderation_service_db`) — decisions, violated rules, and penalties form a clean relational audit trail tying each decision back to a specific applicant and session.
 
 It does **not** generate or store applicant/credential/record data itself, and it does not handle the real-time communication between players (Discord DMs Service) — it only consumes information and produces a verdict.
 
@@ -77,11 +91,15 @@ It does **not** generate or store applicant/credential/record data itself, and i
 
 Provides real-time communication between the Moderator and Junior Moderators during a session, through a Discord-like WebSocket interface. It manages channels tied to the current moderation session (e.g. #enrollment-check, #faculty-check, #course-registration, #general-mod-chat), with different players able to access different channels depending on what information they've been assigned.
 
+**Database:** MongoDB (`discord_dms_service_db`) — chat messages and per-session channel membership are naturally document-shaped and high-write, which fits MongoDB's model better than a fixed relational schema.
+
 It transports messages but does **not** determine whether the information shared is correct, and it does not own any applicant, credential, or rule data itself — it's purely the communication layer.
 
 ## Architecture Diagram
 
-![Architecture](./docs/architecture.svg)
+![Architecture](./docs/architecture.png)
+
+Services sit inside a single **Service Layer** boundary, with the Client entering only through Player Service (register/login), Server Moderation Session Service (session lifecycle), and Discord DMs (WebSocket channels) — every other service is reached only through Session or Moderation, never directly. Each service's database is drawn as a labeled cylinder next to it, color-coded MongoDB (green) vs. PostgreSQL (blue) per the legend. A second legend explains the line styles: orchestration queries (Session/Moderation calling a data service), the real-time Discord relay, the Applicant/Credential/University-Record mutual-initialization trio, and Server Rules' direct check against University Record.
 
 **Service Relationships**
 
@@ -109,11 +127,34 @@ Used for Player Service, Server Moderation Session Service, Applicant Service, C
 
 Used for Moderation Service and Discord DMs Service. Moderation Service calls four other services per decision and must stay responsive under concurrent sessions — goroutines handle that fan-out cheaply. Discord DMs Service keeps many per-channel WebSocket connections open per shift; Go's goroutine-per-connection model is built for exactly that.
 
+**Databases**
+
+Following the database-per-service rule below, each service picked PostgreSQL or MongoDB based on how structured its own data is, not by matching its language:
+
+| Service | Database | Why |
+|---|---|---|
+| Player Service | PostgreSQL | Relational links between accounts, friends, XP history |
+| Server Moderation Session Service | PostgreSQL | Structured, short-lived session/shift records |
+| University Record Service | PostgreSQL | Relational enrollment/course/semester data with field-level access scoping |
+| Moderation Service | PostgreSQL | Relational audit trail of decisions and penalties |
+| Applicant Service | MongoDB | Applicant shape varies by role (student/alumnus/outsider) |
+| Credential Service | MongoDB | Credential documents vary by type |
+| Server Rules Service | MongoDB | Arbitrarily nested rule conditions |
+| Discord DMs Service | MongoDB | High-write, document-shaped chat messages |
+
 ## Communication Contract
  
-### Data management approach
- 
-Database-per-service: each service owns its own database, and no service reads another's database directly. All cross-service data access goes through the owning service's API.
+### Data Management Across Microservices
+
+We use **database-per-service**, not a shared database: each of the 8 services owns one private database (see the **Databases** table above), and no service ever connects to another service's database directly — not even read-only. All cross-service data access is mediated through the owning service's REST API, using the request/response shapes defined in the Endpoints tables below.
+
+This has a few direct consequences for how the system behaves:
+
+- **No shared schema.** Applicant, Credential, and University Record Service each store only the fields relevant to their own concern (profile data, documents, hidden records respectively) rather than one team owning a combined "applicant" table others read from. This is why Server Rules Service can't just query enrollment data directly — it has to ask University Record Service for it over the network.
+- **Mutual initialization instead of a single source of truth.** Applicant, Credential, and University Record Service can each be the *first* service contacted about a new applicant. Whichever one is first creates that applicant's record and pushes the relevant subset of data to the other two over their APIs. This avoids a single owning service becoming a bottleneck, at the cost of each of the three needing to handle "applicant already exists, sync my copy" as a real code path — not just "create new."
+- **Read-heavy orchestration, not a shared cache.** Session Service and Moderation Service don't hold their own copies of applicant/credential/rule/record data — every shift and every decision re-queries the four data services live. We're intentionally trading a bit of latency for never having stale applicant data during a shift.
+- **Eventual, not transactional, consistency.** Because propagation between Applicant/Credential/University Record happens as separate API calls rather than a single database transaction, it's possible for one of the three to succeed and another to fail or lag. For Lab 1 we're accepting this risk rather than introducing a message broker; if this becomes a real problem in testing, promoting the mutual-init calls to an event-driven pattern is the natural next step, but it's out of scope for now.
+- **Credentials never travel in the diagram or the repo.** Each service's Docker setup expects DB connection details via environment variables (see each service's own README), and none of those values are committed — only `.env.example` placeholders.
  
 ### Endpoints
  
