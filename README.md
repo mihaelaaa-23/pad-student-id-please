@@ -165,6 +165,7 @@ This has a few direct consequences for how the system behaves:
 | POST | /players/login | `{username: string, password: string}` | `{token: string, playerId: string}` |
 | GET | /players/{id} | — | `{playerId: string, username: string, level: int, xp: int, friends: string[]}` |
 | PATCH | /players/{id}/xp | `{xpGained: int, reason: string}` | `{playerId: string, xp: int, level: int}` |
+| DELETE | /players/{id} | — | `{playerId: string, deleted: boolean}` |
  
 #### Server Moderation Session Service
 | Method | Path | Request | Response |
