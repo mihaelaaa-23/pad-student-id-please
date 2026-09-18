@@ -1,0 +1,82 @@
+{
+  "info": {
+    "_postman_id": "b1e1b2b0-1111-4a1a-9c1a-player0001",
+    "name": "Player Service",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3001" },
+    { "key": "playerId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] }
+      }
+    },
+    {
+      "name": "Register Player",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "if (json.playerId) { pm.collectionVariables.set('playerId', json.playerId); }"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"username\": \"mihaela\",\n  \"email\": \"m@test.com\",\n  \"password\": \"pw123\"\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/players/register", "host": ["{{baseUrl}}"], "path": ["players", "register"] }
+      }
+    },
+    {
+      "name": "Login Player",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"username\": \"mihaela\",\n  \"password\": \"pw123\"\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/players/login", "host": ["{{baseUrl}}"], "path": ["players", "login"] }
+      }
+    },
+    {
+      "name": "Get Player",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{baseUrl}}/players/{{playerId}}", "host": ["{{baseUrl}}"], "path": ["players", "{{playerId}}"] }
+      }
+    },
+    {
+      "name": "Update Player XP",
+      "request": {
+        "method": "PATCH",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"xpGained\": 150,\n  \"reason\": \"test\"\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/players/{{playerId}}/xp", "host": ["{{baseUrl}}"], "path": ["players", "{{playerId}}", "xp"] }
+      }
+    },
+    {
+      "name": "Delete Player",
+      "request": {
+        "method": "DELETE",
+        "url": { "raw": "{{baseUrl}}/players/{{playerId}}", "host": ["{{baseUrl}}"], "path": ["players", "{{playerId}}"] }
+      }
+    }
+  ]
+}
