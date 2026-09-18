@@ -1,0 +1,70 @@
+{
+  "info": {
+    "_postman_id": "c2f2c3c1-2222-4b2b-9d2b-session0001",
+    "name": "Server Moderation Session Service",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3002" },
+    { "key": "sessionId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] }
+      }
+    },
+    {
+      "name": "Create Session",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "if (json.sessionId) { pm.collectionVariables.set('sessionId', json.sessionId); }"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"moderatorId\": \"p_mod1\",\n  \"juniorIds\": [\"p_jr1\", \"p_jr2\"]\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/sessions", "host": ["{{baseUrl}}"], "path": ["sessions"] }
+      }
+    },
+    {
+      "name": "Join Session",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"playerId\": \"p_jr3\",\n  \"role\": \"junior\"\n}"
+        },
+        "url": { "raw": "{{baseUrl}}/sessions/{{sessionId}}/join", "host": ["{{baseUrl}}"], "path": ["sessions", "{{sessionId}}", "join"] }
+      }
+    },
+    {
+      "name": "Get Session",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{baseUrl}}/sessions/{{sessionId}}", "host": ["{{baseUrl}}"], "path": ["sessions", "{{sessionId}}"] }
+      }
+    },
+    {
+      "name": "End Session",
+      "request": {
+        "method": "POST",
+        "url": { "raw": "{{baseUrl}}/sessions/{{sessionId}}/end", "host": ["{{baseUrl}}"], "path": ["sessions", "{{sessionId}}", "end"] }
+      }
+    }
+  ]
+}
