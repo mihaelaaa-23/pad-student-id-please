@@ -1,9 +1,11 @@
 [submodule "services/player-service"]
-	path = services/player-service
-	url = https://github.com/mihaelaaa-23/player-service.git
+        path = services/player-service
+        url = https://github.com/mihaelaaa-23/player-service.git
+        branch = dev
 [submodule "services/server-moderation-session-service"]
-	path = services/server-moderation-session-service
-	url = https://github.com/mihaelaaa-23/server-moderation-session-service.git
+        path = services/server-moderation-session-service
+        url = https://github.com/mihaelaaa-23/server-moderation-session-service.git
+        branch = dev
 [submodule "services/applicant-service"]
 	path = services/applicant-service
 	url = https://github.com/ciprik13/applicant-service.git
