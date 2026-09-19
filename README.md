@@ -305,6 +305,30 @@ We use the [Conventional Commits](https://www.conventionalcommits.org/) specific
 | Moderation Service | https://github.com/D3adeYe69/Moderation-Service | `services/moderation-service` |
 | Discord DMs Service | https://github.com/D3adeYe69/Discord-DMs-Service | `services/discord-dms-service` |
 
+## Docker Images
+
+Each service is pushed to DockerHub as a versioned, public image — no Dockerfiles are needed to run the system, only the images below.
+
+| Service | DockerHub Image | Run Requirements |
+|---|---|---|
+| Player Service | `mihaela5/player-service:0.2.0` | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` |
+| Server Moderation Session Service | `mihaela5/session-service:0.2.0` | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` — if unset, falls back to mocked responses for those dependencies |
+| Applicant Service | *pending* | |
+| Credential Service | *pending* | |
+| Server Rules Service | *pending* | |
+| University Record Service | *pending* | |
+| Moderation Service | *pending* | |
+| Discord DMs Service | *pending* | |
+
+Pull an image directly, e.g.:
+```bash
+docker pull mihaela5/player-service:0.2.0
+```
+
+**Note:** these are the variables the container itself reads. If you're running the full system via the shared `docker-compose.yml` at the repo root, its `.env` file uses service-prefixed names instead (e.g. `PLAYER_DB_USER`) to avoid collisions across all 8 services sharing one file — see that file for the exact mapping.
+
+See `docker-compose.yml` at the repo root for the full setup, including each service's database.
+
 ## Project Board
 
 - Project Board: [Link to GitHub Project](https://github.com/users/mihaelaaa-23/projects/4)
