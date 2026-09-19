@@ -104,6 +104,7 @@ Services sit inside a single **Service Layer** boundary, with the Client enterin
 **Service Relationships**
 
 Server Moderation Session Service acts as the central coordinator during an active shift. It queries Applicant Service for the current applicant, Credential Service to check submitted documents, Server Rules Service to evaluate the applicant against current access rules, and University Record Service to pull any hidden records needed for verification. Once a shift ends, it publishes the result to Player Service so XP and levels can be updated.
+This is exposed concretely through `POST /sessions/{id}/process-applicant`, which currently calls mocked versions of these four services and falls back to real HTTP calls once they're deployed and reachable.
 
 Moderation Service independently gathers the same four services — Applicant, Credential, Server Rules, and University Record — to determine whether the Moderator's decision (Accept, Reject, Flag, or Ban) was correct under the current rules. It does not talk to Player Service or Session Service directly; it only consumes applicant-side data to produce a verdict.
 
@@ -174,6 +175,7 @@ This has a few direct consequences for how the system behaves:
 | POST | /sessions/{id}/join | `{playerId: string, role: string}` | `{sessionId: string, role: string, status: string}` |
 | GET | /sessions/{id} | — | `{sessionId: string, currentApplicantId: string, processedCount: int, score: int, status: string}` |
 | POST | /sessions/{id}/end | — | `{sessionId: string, result: string, score: int}` |
+| POST | /sessions/{id}/process-applicant | — | `{sessionId: string, processedCount: int, currentApplicantId: string, applicant: object, credentialCheck: object, rulesCheck: object, universityRecords: object}` |
  
 #### Applicant Service
 | Method | Path | Request | Response |
