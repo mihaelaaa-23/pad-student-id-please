@@ -1,0 +1,251 @@
+services:
+  # ==================== Player Service (Mihaela) ====================
+  player-service:
+    image: mihaela5/player-service:0.2.0
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      PORT: 3001
+      DB_HOST: player-db
+      DB_PORT: 5432
+      DB_USER: ${PLAYER_DB_USER}
+      DB_PASSWORD: ${PLAYER_DB_PASSWORD}
+      DB_NAME: ${PLAYER_DB_NAME}
+    depends_on:
+      player-db:
+        condition: service_healthy
+
+  player-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${PLAYER_DB_USER}
+      POSTGRES_PASSWORD: ${PLAYER_DB_PASSWORD}
+      POSTGRES_DB: ${PLAYER_DB_NAME}
+    volumes:
+      - player_db_data:/var/lib/postgresql/data
+      - ./db/player-service/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PLAYER_DB_USER} -d ${PLAYER_DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ==================== Server Moderation Session Service (Mihaela) ====================
+  session-service:
+    image: mihaela5/session-service:0.2.0
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    environment:
+      PORT: 3002
+      DB_HOST: session-db
+      DB_PORT: 5432
+      DB_USER: ${SESSION_DB_USER}
+      DB_PASSWORD: ${SESSION_DB_PASSWORD}
+      DB_NAME: ${SESSION_DB_NAME}
+    depends_on:
+      session-db:
+        condition: service_healthy
+
+  session-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${SESSION_DB_USER}
+      POSTGRES_PASSWORD: ${SESSION_DB_PASSWORD}
+      POSTGRES_DB: ${SESSION_DB_NAME}
+    volumes:
+      - session_db_data:/var/lib/postgresql/data
+      - ./db/session-service/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${SESSION_DB_USER} -d ${SESSION_DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ==================== Applicant Service (Ciprian) — PLACEHOLDER ====================
+  # TODO(Ciprian): replace image tag, port, and confirm this Mongo block once pushed
+  applicant-service:
+    image: <CIPRIAN_DOCKERHUB_USER>/applicant-service:<VERSION>
+    restart: unless-stopped
+    ports:
+      - "<PORT>:<PORT>"
+    environment:
+      PORT: <PORT>
+      DB_HOST: applicant-db
+      DB_PORT: 27017
+      DB_USER: ${APPLICANT_DB_USER}
+      DB_PASSWORD: ${APPLICANT_DB_PASSWORD}
+      DB_NAME: ${APPLICANT_DB_NAME}
+    depends_on:
+      - applicant-db
+
+  applicant-db:
+    image: mongo:7
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${APPLICANT_DB_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${APPLICANT_DB_PASSWORD}
+      MONGO_INITDB_DATABASE: ${APPLICANT_DB_NAME}
+    volumes:
+      - applicant_db_data:/data/db
+      - ./db/applicant-service/init.js:/docker-entrypoint-initdb.d/init.js
+
+  # ==================== Credential Service (Ciprian) — PLACEHOLDER ====================
+  credential-service:
+    image: <CIPRIAN_DOCKERHUB_USER>/credential-service:<VERSION>
+    restart: unless-stopped
+    ports:
+      - "<PORT>:<PORT>"
+    environment:
+      PORT: <PORT>
+      DB_HOST: credential-db
+      DB_PORT: 27017
+      DB_USER: ${CREDENTIAL_DB_USER}
+      DB_PASSWORD: ${CREDENTIAL_DB_PASSWORD}
+      DB_NAME: ${CREDENTIAL_DB_NAME}
+    depends_on:
+      - credential-db
+
+  credential-db:
+    image: mongo:7
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${CREDENTIAL_DB_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${CREDENTIAL_DB_PASSWORD}
+      MONGO_INITDB_DATABASE: ${CREDENTIAL_DB_NAME}
+    volumes:
+      - credential_db_data:/data/db
+      - ./db/credential-service/init.js:/docker-entrypoint-initdb.d/init.js
+
+  # ==================== Server Rules Service (Ion) — PLACEHOLDER ====================
+  server-rules-service:
+    image: <ION_DOCKERHUB_USER>/server-rules-service:<VERSION>
+    restart: unless-stopped
+    ports:
+      - "<PORT>:<PORT>"
+    environment:
+      PORT: <PORT>
+      DB_HOST: rules-db
+      DB_PORT: 27017
+      DB_USER: ${RULES_DB_USER}
+      DB_PASSWORD: ${RULES_DB_PASSWORD}
+      DB_NAME: ${RULES_DB_NAME}
+    depends_on:
+      - rules-db
+
+  rules-db:
+    image: mongo:7
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${RULES_DB_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${RULES_DB_PASSWORD}
+      MONGO_INITDB_DATABASE: ${RULES_DB_NAME}
+    volumes:
+      - rules_db_data:/data/db
+      - ./db/server-rules-service/init.js:/docker-entrypoint-initdb.d/init.js
+
+  # ==================== University Record Service (Ion) — PLACEHOLDER ====================
+  university-record-service:
+    image: <ION_DOCKERHUB_USER>/university-record-service:<VERSION>
+    restart: unless-stopped
+    ports:
+      - "<PORT>:<PORT>"
+    environment:
+      PORT: <PORT>
+      DB_HOST: university-record-db
+      DB_PORT: 5432
+      DB_USER: ${UNIVERSITY_RECORD_DB_USER}
+      DB_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
+      DB_NAME: ${UNIVERSITY_RECORD_DB_NAME}
+    depends_on:
+      university-record-db:
+        condition: service_healthy
+
+  university-record-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${UNIVERSITY_RECORD_DB_USER}
+      POSTGRES_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
+      POSTGRES_DB: ${UNIVERSITY_RECORD_DB_NAME}
+    volumes:
+      - university_record_db_data:/var/lib/postgresql/data
+      - ./db/university-record-service/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${UNIVERSITY_RECORD_DB_USER} -d ${UNIVERSITY_RECORD_DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ==================== Moderation Service (Liviu) — PLACEHOLDER ====================
+  moderation-service:
+    image: <LIVIU_DOCKERHUB_USER>/moderation-service:<VERSION>
+    restart: unless-stopped
+    ports:
+      - "<PORT>:<PORT>"
+    environment:
+      PORT: <PORT>
+      DB_HOST: moderation-db
+      DB_PORT: 5432
+      DB_USER: ${MODERATION_DB_USER}
+      DB_PASSWORD: ${MODERATION_DB_PASSWORD}
+      DB_NAME: ${MODERATION_DB_NAME}
+    depends_on:
+      moderation-db:
+        condition: service_healthy
+
+  moderation-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${MODERATION_DB_USER}
+      POSTGRES_PASSWORD: ${MODERATION_DB_PASSWORD}
+      POSTGRES_DB: ${MODERATION_DB_NAME}
+    volumes:
+      - moderation_db_data:/var/lib/postgresql/data
+      - ./db/moderation-service/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MODERATION_DB_USER} -d ${MODERATION_DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ==================== Discord DMs Service (Liviu) — PLACEHOLDER ====================
+  discord-dms-service:
+    image: <LIVIU_DOCKERHUB_USER>/discord-dms-service:<VERSION>
+    restart: unless-stopped
+    ports:
+      - "<PORT>:<PORT>"
+    environment:
+      PORT: <PORT>
+      DB_HOST: discord-dms-db
+      DB_PORT: 27017
+      DB_USER: ${DISCORD_DMS_DB_USER}
+      DB_PASSWORD: ${DISCORD_DMS_DB_PASSWORD}
+      DB_NAME: ${DISCORD_DMS_DB_NAME}
+    depends_on:
+      - discord-dms-db
+
+  discord-dms-db:
+    image: mongo:7
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${DISCORD_DMS_DB_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${DISCORD_DMS_DB_PASSWORD}
+      MONGO_INITDB_DATABASE: ${DISCORD_DMS_DB_NAME}
+    volumes:
+      - discord_dms_db_data:/data/db
+      - ./db/discord-dms-service/init.js:/docker-entrypoint-initdb.d/init.js
+
+volumes:
+  player_db_data:
+  session_db_data:
+  applicant_db_data:
+  credential_db_data:
+  rules_db_data:
+  university_record_db_data:
+  moderation_db_data:
+  discord_dms_db_data:
