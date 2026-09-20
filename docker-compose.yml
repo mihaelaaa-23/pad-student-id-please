@@ -67,7 +67,7 @@ services:
 
   # ==================== Applicant Service (Ciprian) ====================
   applicant-service:
-    image: ciprik13/applicant-service:0.2.0
+    image: ciprik13/applicant-service:0.3.0
     restart: unless-stopped
     ports:
       - "3003:3003"
@@ -102,7 +102,7 @@ services:
 
   # ==================== Credential Service (Ciprian) ====================
   credential-service:
-    image: ciprik13/credential-service:0.2.0
+    image: ciprik13/credential-service:0.3.0
     restart: unless-stopped
     ports:
       - "3004:3004"
