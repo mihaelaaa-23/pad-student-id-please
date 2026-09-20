@@ -1,7 +1,7 @@
 services:
   # ==================== Player Service (Mihaela) ====================
   player-service:
-    image: mihaela5/player-service:0.2.0
+    image: mihaela5/player-service:0.3.0
     restart: unless-stopped
     ports:
       - "3001:3001"
@@ -34,7 +34,7 @@ services:
 
   # ==================== Server Moderation Session Service (Mihaela) ====================
   session-service:
-    image: mihaela5/session-service:0.2.0
+    image: mihaela5/session-service:0.3.0
     restart: unless-stopped
     ports:
       - "3002:3002"
