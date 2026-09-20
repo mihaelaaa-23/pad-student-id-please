@@ -65,22 +65,24 @@ services:
       timeout: 5s
       retries: 5
 
-  # ==================== Applicant Service (Ciprian) — PLACEHOLDER ====================
-  # TODO(Ciprian): replace image tag, port, and confirm this Mongo block once pushed
+  # ==================== Applicant Service (Ciprian) ====================
   applicant-service:
-    image: <CIPRIAN_DOCKERHUB_USER>/applicant-service:<VERSION>
+    image: ciprik13/applicant-service:0.2.0
     restart: unless-stopped
     ports:
-      - "<PORT>:<PORT>"
+      - "3003:3003"
     environment:
-      PORT: <PORT>
+      PORT: 3003
+      STORE_DRIVER: mongo
+      DECEPTIVE_RATE: ${APPLICANT_DECEPTIVE_RATE:-0.35}
       DB_HOST: applicant-db
       DB_PORT: 27017
       DB_USER: ${APPLICANT_DB_USER}
       DB_PASSWORD: ${APPLICANT_DB_PASSWORD}
       DB_NAME: ${APPLICANT_DB_NAME}
     depends_on:
-      - applicant-db
+      applicant-db:
+        condition: service_healthy
 
   applicant-db:
     image: mongo:7
@@ -91,7 +93,12 @@ services:
       MONGO_INITDB_DATABASE: ${APPLICANT_DB_NAME}
     volumes:
       - applicant_db_data:/data/db
-      - ./db/applicant-service/init.js:/docker-entrypoint-initdb.d/init.js
+      - ./db/applicant-service/init.js:/docker-entrypoint-initdb.d/init.js:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\""]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   # ==================== Credential Service (Ciprian) — PLACEHOLDER ====================
   credential-service:
