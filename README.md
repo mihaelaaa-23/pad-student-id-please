@@ -212,9 +212,30 @@ This has a few direct consequences for how the system behaves:
 #### Discord DMs Service
 
 | Method | Path | Request | Response |
-|---|---|---|---|
-| WS | /ws/sessions/{id}/channels/{channel} | `{senderId: string, content: string}` | broadcasts `{senderId: string, content: string, timestamp: string}` |
-| GET | /sessions/{id}/channels | — | `{channels: string[]}` (visible to requesting player) |
+|---|---|---|------|
+| GET | /status | — | `{service: string, status: string, database: string, time: string}` — `503` with `status: "degraded"` when MongoDB is unreachable |
+| POST | /sessions/{id}/bootstrap | — | `{sessionId: string, created: string[], existing: string[], channels: string[]}` — creates the four default channels; safe to call twice |
+| POST | /sessions/{id}/channels | `{name: string}` | `{id: string, sessionId: string, name: string, createdAt: string}` |
+| GET | /sessions/{id}/channels | `?playerId=string` (optional) | `{sessionId: string, playerId: string, channels: string[]}` — narrowed to that player's channels when `playerId` is given, all channels otherwise |
+| GET | /sessions/{id}/channels/{channel} | — | `{id: string, sessionId: string, name: string, createdAt: string}` |
+| PATCH | /sessions/{id}/channels/{channel} | `{name: string}` | `{id: string, sessionId: string, name: string, createdAt: string}` — keeps the id, the messages and the access grants |
+| DELETE | /sessions/{id}/channels/{channel} | — | — (`204`, no body; the channel's messages are deleted with it) |
+| POST | /sessions/{id}/members | `{playerId: string, role: string, channels: string[]}` | `{sessionId: string, playerId: string, role: string, channels: string[], joinedAt: string}` — upsert: calling it again replaces the player's assignment |
+| GET | /sessions/{id}/members | — | `{sessionId: string, count: int, members: [{sessionId: string, playerId: string, role: string, channels: string[], joinedAt: string}]}` |
+| GET | /sessions/{id}/members/{playerId} | — | `{sessionId: string, playerId: string, role: string, channels: string[], joinedAt: string}` |
+| DELETE | /sessions/{id}/members/{playerId} | — | — (`204`, no body) |
+| POST | /sessions/{id}/channels/{channel}/messages | `{senderId: string, content: string}` | `{id: string, channelId: string, senderId: string, content: string, timestamp: string}` — also broadcast to every WebSocket listener on that channel |
+| GET | /sessions/{id}/channels/{channel}/messages | `?playerId=string&limit=int&before=RFC3339` (`limit` 1–200, default 50) | `{sessionId: string, channel: string, count: int, messages: [{id: string, channelId: string, senderId: string, content: string, timestamp: string, editedAt?: string}]}` — oldest first |
+| GET | /sessions/{id}/channels/{channel}/messages/{messageId} | `?playerId=string` | `{id: string, channelId: string, senderId: string, content: string, timestamp: string, editedAt?: string}` |
+| PATCH | /sessions/{id}/channels/{channel}/messages/{messageId} | `{senderId: string, content: string}` | `{id: string, channelId: string, senderId: string, content: string, timestamp: string, editedAt: string}` — `403` unless `senderId` is the author |
+| DELETE | /sessions/{id}/channels/{channel}/messages/{messageId} | `?playerId=string` | — (`204`, no body); `403` unless the player is the author or the session's moderator |
+| WS | /ws/sessions/{id}/channels/{channel} | `?playerId=string`, then `{senderId: string, content: string}` per message | broadcasts `{senderId: string, content: string, timestamp: string}` to the other listeners; every message is stored before it is broadcast |
+
+Notes for callers:
+
+- `role` is `moderator` or `junior`. A moderator reaches every channel of the session; a junior moderator needs at least one channel in `channels` and only reaches those — that is how information stays fragmented across the team.
+- Every message endpoint and the WebSocket act on behalf of a player (`playerId`, or `senderId` when posting or editing). That identity is mandatory there: it is `400` when missing, `404` when the session has no such channel, and `403` when the player was not assigned it.
+- Errors always come back as `{error: string}` with a human-readable sentence.
 
 ## Development Guidelines
  
