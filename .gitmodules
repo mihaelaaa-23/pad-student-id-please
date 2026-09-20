@@ -9,9 +9,11 @@
 [submodule "services/applicant-service"]
 	path = services/applicant-service
 	url = https://github.com/ciprik13/applicant-service.git
+	branch = dev
 [submodule "services/credential-service"]
 	path = services/credential-service
 	url = https://github.com/ciprik13/credential-service.git
+	branch = dev
 [submodule "services/moderation-service"]
 	path = services/moderation-service
 	url = https://github.com/D3adeYe69/Moderation-Service
