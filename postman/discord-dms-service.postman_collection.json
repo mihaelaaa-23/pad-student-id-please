@@ -1,0 +1,685 @@
+{
+  "info": {
+    "_postman_id": "6f2a1d58-7f1c-4c2e-9b74-1c1c8b0d1a01",
+    "name": "Discord DMs Service",
+    "description": "Every HTTP endpoint of the Discord DMs Service (Team 18, PAD project \"Student ID, Please\"), ordered as a walkthrough of one moderation shift: create the channels, put the team on them, talk, then clean up.\n\nRun it top to bottom with the Collection Runner against a running stack (`./scripts/run.sh`, or `docker compose up -d`). Each request asserts its own status code, and the message id is passed between requests through a collection variable.\n\nThe real-time endpoint is not part of this collection, because a WebSocket cannot be replayed by the Collection Runner. Open it separately, in Postman's WebSocket request type or with `websocat`:\n\n    ws://localhost:8080/ws/sessions/{{sessionId}}/channels/general-mod-chat?playerId={{juniorId}}\n\nSend `{\"senderId\": \"{{juniorId}}\", \"content\": \"Hello\"}` and every other client on that channel receives `{\"senderId\", \"content\", \"timestamp\"}`.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080" },
+    { "key": "sessionId", "value": "shift-001" },
+    { "key": "moderatorId", "value": "player-moderator-1" },
+    { "key": "juniorId", "value": "player-junior-1" },
+    { "key": "messageId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Get service status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/status", "host": ["{{baseUrl}}"], "path": ["status"] },
+            "description": "Reports whether the service is up and whether it can reach MongoDB."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the service is up', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('the database is reachable', function () {",
+                  "    pm.expect(pm.response.json().database).to.eql('up');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Channels",
+      "item": [
+        {
+          "name": "Create the default channels of a shift",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/bootstrap",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "bootstrap"]
+            },
+            "description": "Creates #enrollment-check, #faculty-check, #course-registration and #general-mod-chat. Safe to run twice: channels that already exist are reported as existing."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the session has its four channels', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "    pm.expect(pm.response.json().channels).to.have.lengthOf(4);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create an extra channel",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n    \"name\": \"impersonation-watch\"\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/channels",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "channels"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the channel was created', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "    pm.expect(pm.response.json().name).to.eql('impersonation-watch');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create a channel with an invalid name",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n    \"name\": \"General Mod Chat\"\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/channels",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "channels"]
+            },
+            "description": "Channel names follow Discord conventions, so a name with spaces and capitals is rejected with an explanation."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the name is rejected with an explanation', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "    pm.expect(pm.response.json().error).to.include('lowercase');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List every channel of the shift",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/channels",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "channels"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('all five channels are listed', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().channels).to.include('impersonation-watch');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get one channel",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/channels/general-mod-chat",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "channels", "general-mod-chat"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the channel is returned with its id', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().id).to.be.a('string');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Rename a channel",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n    \"name\": \"impersonation-check\"\n}" },
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/channels/impersonation-watch",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "channels", "impersonation-watch"]
+            },
+            "description": "The channel keeps its id and its messages, and every assignment to it follows the new name."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the channel was renamed', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().name).to.eql('impersonation-check');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Members",
+      "item": [
+        {
+          "name": "Put the moderator on the shift",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"playerId\": \"{{moderatorId}}\",\n    \"role\": \"moderator\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/members",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "members"]
+            },
+            "description": "The moderator running the shift reaches every channel, so no channel list is needed."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the moderator joined', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().role).to.eql('moderator');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Put a junior moderator on two channels",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"playerId\": \"{{juniorId}}\",\n    \"role\": \"junior\",\n    \"channels\": [\"enrollment-check\", \"general-mod-chat\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/members",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "members"]
+            },
+            "description": "Information is fragmented on purpose: this player sees only the two channels they were assigned."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the junior moderator was assigned two channels', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().channels).to.have.lengthOf(2);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Add a member with an unknown role",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"playerId\": \"player-intruder\",\n    \"role\": \"admin\",\n    \"channels\": [\"faculty-check\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/members",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "members"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the role is rejected', function () {",
+                  "    pm.response.to.have.status(400);",
+                  "    pm.expect(pm.response.json().error).to.include('moderator');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List the roster of the shift",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/members",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "members"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('both players are on the shift', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().count).to.eql(2);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get one member",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/members/{{juniorId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "members", "{{juniorId}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the member is returned', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().playerId).to.eql(pm.collectionVariables.get('juniorId'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List the channels one player can see",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/channels?playerId={{juniorId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "channels"],
+              "query": [{ "key": "playerId", "value": "{{juniorId}}" }]
+            },
+            "description": "This is the endpoint from the team communication contract: the channels visible to the requesting player."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('only the assigned channels are visible', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const channels = pm.response.json().channels;",
+                  "    pm.expect(channels).to.have.lengthOf(2);",
+                  "    pm.expect(channels).to.not.include('faculty-check');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Messages",
+      "item": [
+        {
+          "name": "Post a message",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"senderId\": \"{{juniorId}}\",\n    \"content\": \"The enrollment list has no student with this id.\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/channels/general-mod-chat/messages",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "channels", "general-mod-chat", "messages"]
+            },
+            "description": "The message is stored and pushed to everyone who has this channel open over WebSocket."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the message was posted', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "pm.collectionVariables.set('messageId', pm.response.json().id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Post to a channel the player was not assigned",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"senderId\": \"{{juniorId}}\",\n    \"content\": \"Can I read this one too?\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/channels/faculty-check/messages",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "channels", "faculty-check", "messages"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the player is kept out of that channel', function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read the channel history",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/channels/general-mod-chat/messages?playerId={{moderatorId}}&limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "channels", "general-mod-chat", "messages"],
+              "query": [
+                { "key": "playerId", "value": "{{moderatorId}}" },
+                { "key": "limit", "value": "50" },
+                { "key": "before", "value": "2026-09-20T18:30:00Z", "disabled": true }
+              ]
+            },
+            "description": "Returns the latest messages in chronological order. Enable 'before' to page further back."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the history contains the message', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().count).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get one message",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/channels/general-mod-chat/messages/{{messageId}}?playerId={{moderatorId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "channels", "general-mod-chat", "messages", "{{messageId}}"],
+              "query": [{ "key": "playerId", "value": "{{moderatorId}}" }]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the message is returned', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().id).to.eql(pm.collectionVariables.get('messageId'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Edit a message",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"senderId\": \"{{juniorId}}\",\n    \"content\": \"Correction: the id is on the list, but under another name.\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/channels/general-mod-chat/messages/{{messageId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "channels", "general-mod-chat", "messages", "{{messageId}}"]
+            },
+            "description": "Only the author may rewrite what they said."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the message was edited', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().editedAt).to.be.a('string');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Edit someone else's message",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"senderId\": \"{{moderatorId}}\",\n    \"content\": \"Rewriting what a junior moderator said.\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/channels/general-mod-chat/messages/{{messageId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "channels", "general-mod-chat", "messages", "{{messageId}}"]
+            },
+            "description": "Even the moderator cannot put words in someone else's mouth; they may only delete."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('editing a message of another player is refused', function () {",
+                  "    pm.response.to.have.status(403);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete a message as the moderator",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/channels/general-mod-chat/messages/{{messageId}}?playerId={{moderatorId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "channels", "general-mod-chat", "messages", "{{messageId}}"],
+              "query": [{ "key": "playerId", "value": "{{moderatorId}}" }]
+            },
+            "description": "The author may delete their own message, and the moderator of the shift may delete anyone's."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the message is gone', function () {",
+                  "    pm.response.to.have.status(204);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Clean up",
+      "item": [
+        {
+          "name": "Delete the extra channel",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/channels/impersonation-check",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "channels", "impersonation-check"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the channel and its messages are gone', function () {",
+                  "    pm.response.to.have.status(204);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Take the junior moderator off the shift",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/members/{{juniorId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "members", "{{juniorId}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the player left the shift', function () {",
+                  "    pm.response.to.have.status(204);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Take the moderator off the shift",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/members/{{moderatorId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "members", "{{moderatorId}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the shift is empty again', function () {",
+                  "    pm.response.to.have.status(204);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
