@@ -50,7 +50,7 @@ This service does **not** store any persistent player data (accounts, XP, friend
 
 ### Applicant Service
 
-Owns the people attempting to access the Discord server. It generates applicants with attributes such as name, student ID, major, year, university status, courses, and role (student, teaching assistant, staff, alumnus, or outsider). Some applicants are deliberately generated with false information or as impersonation attempts. If it's the first service contacted for a new applicant, it initializes that applicant's profile and propagates the relevant data to Credential Service and University Record Service; otherwise, it builds its own record from whichever service initialized the applicant first.
+Owns the people attempting to access the Discord server. It generates applicants with attributes such as name, student ID, major, year, university status, courses, and role (FAF student, student of another faculty, teaching assistant, staff, alumnus, or outsider). Some applicants are deliberately generated with false information or as impersonation attempts. If it's the first service contacted for a new applicant, it initializes that applicant's profile and propagates the relevant data to Credential Service and University Record Service; otherwise, it builds its own record from whichever service initialized the applicant first.
 
 **Database:** MongoDB (`applicant_service_db`) — applicant profiles vary in shape by role (student vs. outsider vs. alumnus), which suits a flexible document schema better than a fixed relational one.
 
@@ -180,8 +180,8 @@ This has a few direct consequences for how the system behaves:
 #### Applicant Service
 | Method | Path | Request | Response |
 |---|---|---|---|
-| POST | /applicants/generate | — | `{applicantId: string, name: string, studentId: string, major: string, year: int, role: string, status: string}` |
-| GET | /applicants/{id} | — | `{applicantId: string, name: string, studentId: string, major: string, year: int, role: string, status: string}` |
+| POST | /applicants/generate | — | `{applicantId: string, name: string, studentId: string, major: string, year: int\|null, role: string, status: string}` |
+| GET | /applicants/{id} | — | `{applicantId: string, name: string, studentId: string, major: string, year: int\|null, role: string, status: string}` |
  
 #### Credential Service
 | Method | Path | Request | Response |
@@ -236,6 +236,70 @@ Notes for callers:
 - `role` is `moderator` or `junior`. A moderator reaches every channel of the session; a junior moderator needs at least one channel in `channels` and only reaches those — that is how information stays fragmented across the team.
 - Every message endpoint and the WebSocket act on behalf of a player (`playerId`, or `senderId` when posting or editing). That identity is mandatory there: it is `400` when missing, `404` when the session has no such channel, and `403` when the player was not assigned it.
 - Errors always come back as `{error: string}` with a human-readable sentence.
+
+### Shared Enumerations and Field Formats
+
+These values are produced by Applicant Service and Credential Service and consumed by Server Rules Service, University Record Service and Moderation Service, so they are part of the contract rather than an implementation detail. Adding a value is additive and safe; renaming or removing one requires a PR here and acknowledgement from every consumer.
+
+#### `role` (Applicant Service)
+
+| Value | Meaning |
+|---|---|
+| `student_faf` | student enrolled at FAF |
+| `student_other` | student enrolled at another faculty |
+| `teaching_assistant` | teaching assistant |
+| `staff` | university staff, not enrolled as a student |
+| `alumnus` | former student, no longer enrolled |
+| `outsider` | no relationship with the university |
+
+The student value is split because one of the access rules is "only FAF students may join". With a single `student` value, Server Rules Service would have to infer the faculty from `major`, which means knowing which majors belong to FAF — knowledge that belongs to the university side, not to rule evaluation.
+
+#### `status` (Applicant Service)
+
+University status, independent of `role`.
+
+| Value | Meaning |
+|---|---|
+| `active` | currently enrolled or employed |
+| `graduated` | completed studies |
+| `suspended` | temporarily not in good standing |
+| `expelled` | removed from the university |
+| `none` | no university status at all (outsiders) |
+
+#### `year`
+
+Year of study, `int` for students, `null` for every role that has none: `staff`, `alumnus`, `outsider`. Consumers must accept `null` rather than assuming an integer.
+
+#### `studentId`
+
+Format: `FCIM-<2-digit admission year><4-digit serial>`, for example `FCIM-231847`.
+
+This value is **not unique** across applicants, by design: an impersonator presents a card carrying a real student's id, so two applicants can legitimately carry the same `studentId`. Anything keyed on identity must use `applicantId`.
+
+#### Credential `issues` (Credential Service)
+
+`issues` is empty when `valid` is `true`. Possible values:
+
+| Code | Meaning |
+|---|---|
+| `EXPIRED` | the document's expiry date is in the past |
+| `FORGED_SIGNATURE` | the authenticity signature does not verify |
+| `INCONSISTENT_NAME` | the name on the document does not match the applicant |
+| `INCONSISTENT_STUDENT_ID` | the student id on the document does not match the applicant |
+| `MISSING_DOCUMENT` | a document required for the applicant's role is absent |
+| `MALFORMED_STUDENT_ID` | the student id does not match the format above |
+
+Which documents a role is expected to hold:
+
+| Role | Documents |
+|---|---|
+| `student_faf`, `student_other` | student ID card, university email, enrollment confirmation, course registration |
+| `teaching_assistant` | student ID card, university email, enrollment confirmation |
+| `staff` | university email |
+| `alumnus` | student ID card, university email |
+| `outsider` | none |
+
+An outsider holding no university documents is therefore reported as `valid: true` with no issues. Credential Service validates documents, not admission: rejecting an outsider is Moderation Service's decision, based on the current server rules.
 
 ## Development Guidelines
  
