@@ -110,6 +110,9 @@ services:
       PORT: 3004
       STORE_DRIVER: mongo
       CREDENTIAL_SIGNING_SECRET: ${CREDENTIAL_SIGNING_SECRET}
+      # Reached over the compose network, by service name. Unset would mean the
+      # client answers from its mock even though the real service is running here.
+      APPLICANT_SERVICE_URL: http://applicant-service:3003
       DB_HOST: credential-db
       DB_PORT: 27017
       DB_USER: ${CREDENTIAL_DB_USER}
