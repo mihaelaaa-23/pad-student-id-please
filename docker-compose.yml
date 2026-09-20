@@ -100,21 +100,24 @@ services:
       timeout: 5s
       retries: 5
 
-  # ==================== Credential Service (Ciprian) — PLACEHOLDER ====================
+  # ==================== Credential Service (Ciprian) ====================
   credential-service:
-    image: <CIPRIAN_DOCKERHUB_USER>/credential-service:<VERSION>
+    image: ciprik13/credential-service:0.2.0
     restart: unless-stopped
     ports:
-      - "<PORT>:<PORT>"
+      - "3004:3004"
     environment:
-      PORT: <PORT>
+      PORT: 3004
+      STORE_DRIVER: mongo
+      CREDENTIAL_SIGNING_SECRET: ${CREDENTIAL_SIGNING_SECRET}
       DB_HOST: credential-db
       DB_PORT: 27017
       DB_USER: ${CREDENTIAL_DB_USER}
       DB_PASSWORD: ${CREDENTIAL_DB_PASSWORD}
       DB_NAME: ${CREDENTIAL_DB_NAME}
     depends_on:
-      - credential-db
+      credential-db:
+        condition: service_healthy
 
   credential-db:
     image: mongo:7
@@ -125,7 +128,12 @@ services:
       MONGO_INITDB_DATABASE: ${CREDENTIAL_DB_NAME}
     volumes:
       - credential_db_data:/data/db
-      - ./db/credential-service/init.js:/docker-entrypoint-initdb.d/init.js
+      - ./db/credential-service/init.js:/docker-entrypoint-initdb.d/init.js:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\""]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   # ==================== Server Rules Service (Ion) — PLACEHOLDER ====================
   server-rules-service:
