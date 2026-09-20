@@ -182,12 +182,30 @@ This has a few direct consequences for how the system behaves:
 |---|---|---|---|
 | POST | /applicants/generate | — | `{applicantId: string, name: string, studentId: string, major: string, year: int\|null, role: string, status: string}` |
 | GET | /applicants/{id} | — | `{applicantId: string, name: string, studentId: string, major: string, year: int\|null, role: string, status: string}` |
+| GET | /health | — | `{status: "ok"}` |
+| POST | /applicants | `{name: string, studentId: string, major: string, year: int\|null, role: string, status: string}` | `201` + `{applicantId: string, name: string, studentId: string, major: string, year: int\|null, role: string, status: string}` |
+| GET | /applicants | `?role=string&limit=int&cursor=string` (limit 1-100, default 20) | `{items: [applicant], nextCursor: string\|null}` |
+| PATCH | /applicants/{id} | any subset of `{name, major, year, role, status}` | the full applicant shape |
+| DELETE | /applicants/{id} | — | `{applicantId: string, deleted: boolean}` |
  
 #### Credential Service
 | Method | Path | Request | Response |
 |---|---|---|---|
 | GET | /credentials/{applicantId} | — | `{applicantId: string, studentIdCard: string, universityEmail: string, valid: boolean, issues: string[]}` |
 | POST | /credentials/{applicantId}/validate | — | `{applicantId: string, valid: boolean, issues: string[]}` |
+| GET | /health | — | `{status: "ok"}` |
+| POST | /credentials/{applicantId} | `{core?: {name, studentId, major, year, role, status}, scenario?: string, seed?: int}` | `201` + `{applicantId: string, studentIdCard: string, universityEmail: string, valid: boolean, issues: string[]}` |
+| GET | /credentials | `?limit=int&cursor=string` (limit 1-100, default 20) | `{items: [credential], nextCursor: string\|null}` |
+| PATCH | /credentials/{applicantId} | any subset of `{holderName, expiresAt, documents}` | the credential shape |
+| DELETE | /credentials/{applicantId} | — | `{applicantId: string, deleted: boolean}` |
+
+Notes for callers (Applicant Service, Credential Service):
+
+- `POST /applicants/generate` accepts an optional `?seed=int`. The same seed produces the same applicant, which is what makes the Postman assertions repeatable.
+- `core` in `POST /credentials/{applicantId}` is optional. When it is absent, Credential Service fetches the applicant from Applicant Service and answers `404` if that applicant does not exist; it never invents a person.
+- `PATCH` never accepts `applicantId` or `studentId`. They are the shared key across Applicant, Credential and University Record, so they are immutable after creation and sending either is `422`.
+- `DELETE` is local to the service. It does not cascade to the other two services in Lab 1.
+- Errors come back as `{error: {code: string, message: string, details?: object[]}}`, with codes `NOT_FOUND`, `CONFLICT`, `VALIDATION_FAILED`, `INTERNAL_ERROR` and statuses `201` create, `404` unknown id, `409` duplicate id, `422` validation, `500` internal. Discord DMs Service publishes `{error: string}` instead, so the team still has to agree on one shape; this documents what these two services return today rather than deciding it here.
  
 #### Server Rules Service
 
@@ -201,6 +219,8 @@ This has a few direct consequences for how the system behaves:
 | Method | Path | Request | Response |
 |---|---|---|---|
 | GET | /records/{applicantId} | `{requestingPlayerId: string}` | `{applicantId: string, fields: object}` (scoped to player's access) |
+
+Note from Applicant Service, which calls this endpoint: `GET /records/{applicantId}` carries `requestingPlayerId` in a request body. A request body on GET has no defined semantics in RFC 9110 and Node's `fetch` refuses to send one, so the client sends it as `?requestingPlayerId=string`. Moving it to a query parameter or a header in this table would remove the divergence.
  
 #### Moderation Service
 
