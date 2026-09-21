@@ -223,39 +223,55 @@ Notes for callers (Applicant Service, Credential Service):
 Note from Applicant Service, which calls this endpoint: `GET /records/{applicantId}` carries `requestingPlayerId` in a request body. A request body on GET has no defined semantics in RFC 9110 and Node's `fetch` refuses to send one, so the client sends it as `?requestingPlayerId=string`. Moving it to a query parameter or a header in this table would remove the divergence.
  
 #### Moderation Service
-
 | Method | Path | Request | Response |
 |---|---|---|---|
-| POST | /moderation/decide | `{sessionId: string, applicantId: string, decision: string}` | `{decisionId: string, correct: boolean, violatedRules: string[], penalty: int}` |
-| GET | /moderation/{decisionId} | — | `{decisionId: string, applicantId: string, decision: string, correct: boolean, violatedRules: string[], penalty: int}` |
- 
-#### Discord DMs Service
-
-| Method | Path | Request | Response |
-|---|---|---|------|
-| GET | /status | — | `{service: string, status: string, database: string, time: string}` — `503` with `status: "degraded"` when MongoDB is unreachable |
-| POST | /sessions/{id}/bootstrap | — | `{sessionId: string, created: string[], existing: string[], channels: string[]}` — creates the four default channels; safe to call twice |
-| POST | /sessions/{id}/channels | `{name: string}` | `{id: string, sessionId: string, name: string, createdAt: string}` |
-| GET | /sessions/{id}/channels | `?playerId=string` (optional) | `{sessionId: string, playerId: string, channels: string[]}` — narrowed to that player's channels when `playerId` is given, all channels otherwise |
-| GET | /sessions/{id}/channels/{channel} | — | `{id: string, sessionId: string, name: string, createdAt: string}` |
-| PATCH | /sessions/{id}/channels/{channel} | `{name: string}` | `{id: string, sessionId: string, name: string, createdAt: string}` — keeps the id, the messages and the access grants |
-| DELETE | /sessions/{id}/channels/{channel} | — | — (`204`, no body; the channel's messages are deleted with it) |
-| POST | /sessions/{id}/members | `{playerId: string, role: string, channels: string[]}` | `{sessionId: string, playerId: string, role: string, channels: string[], joinedAt: string}` — upsert: calling it again replaces the player's assignment |
-| GET | /sessions/{id}/members | — | `{sessionId: string, count: int, members: [{sessionId: string, playerId: string, role: string, channels: string[], joinedAt: string}]}` |
-| GET | /sessions/{id}/members/{playerId} | — | `{sessionId: string, playerId: string, role: string, channels: string[], joinedAt: string}` |
-| DELETE | /sessions/{id}/members/{playerId} | — | — (`204`, no body) |
-| POST | /sessions/{id}/channels/{channel}/messages | `{senderId: string, content: string}` | `{id: string, channelId: string, senderId: string, content: string, timestamp: string}` — also broadcast to every WebSocket listener on that channel |
-| GET | /sessions/{id}/channels/{channel}/messages | `?playerId=string&limit=int&before=RFC3339` (`limit` 1–200, default 50) | `{sessionId: string, channel: string, count: int, messages: [{id: string, channelId: string, senderId: string, content: string, timestamp: string, editedAt?: string}]}` — oldest first |
-| GET | /sessions/{id}/channels/{channel}/messages/{messageId} | `?playerId=string` | `{id: string, channelId: string, senderId: string, content: string, timestamp: string, editedAt?: string}` |
-| PATCH | /sessions/{id}/channels/{channel}/messages/{messageId} | `{senderId: string, content: string}` | `{id: string, channelId: string, senderId: string, content: string, timestamp: string, editedAt: string}` — `403` unless `senderId` is the author |
-| DELETE | /sessions/{id}/channels/{channel}/messages/{messageId} | `?playerId=string` | — (`204`, no body); `403` unless the player is the author or the session's moderator |
-| WS | /ws/sessions/{id}/channels/{channel} | `?playerId=string`, then `{senderId: string, content: string}` per message | broadcasts `{senderId: string, content: string, timestamp: string}` to the other listeners; every message is stored before it is broadcast |
+| GET | /status | — | `{service: string, status: string, database: string, time: string}` |
+| POST | /moderation/decide | `{sessionId: string, applicantId: string, decision: string, decidedBy?: string}` | `201` + `{decisionId: string, sessionId: string, applicantId: string, decision: string, expectedDecision: string, correct: boolean, violatedRules: string[], penalty: int, decidedBy?: string, sources: object, createdAt: string, updatedAt?: string}` plus `announcedInChat: boolean` |
+| GET | /moderation/{decisionId} | — | the decision shape |
+| PATCH | /moderation/{decisionId} | `{decision: string, decidedBy?: string}` | the decision shape, plus `announcedInChat: boolean` |
+| DELETE | /moderation/{decisionId} | — | — (`204`, no body) |
+| GET | /sessions/{id}/decisions | `?applicantId=string&limit=int` (limit 1-200, default 50) | `{sessionId: string, count: int, decisions: [decision]}` |
+| GET | /sessions/{id}/summary | — | `{sessionId: string, decisions: int, correct: int, incorrect: int, accuracy: float, penalty: int, byDecision: object}` |
 
 Notes for callers:
 
-- `role` is `moderator` or `junior`. A moderator reaches every channel of the session; a junior moderator needs at least one channel in `channels` and only reaches those — that is how information stays fragmented across the team.
-- Every message endpoint and the WebSocket act on behalf of a player (`playerId`, or `senderId` when posting or editing). That identity is mandatory there: it is `400` when missing, `404` when the session has no such channel, and `403` when the player was not assigned it.
-- Errors always come back as `{error: string}` with a human-readable sentence.
+- `decision` is `accept`, `reject`, `flag` or `ban`.
+- A second `POST /moderation/decide` for the same applicant in the same session is `409`.
+- Errors come back as `{error: {code: string, message: string}}`.
+ 
+#### Discord DMs Service
+| Method | Path | Request | Response |
+|---|---|---|---|
+| GET | /status | — | `{service: string, status: string, database: string, time: string}` |
+| POST | /sessions/<wbr>{id}/<wbr>bootstrap | — | `201` + `{sessionId: string, created: string[], existing: string[], channels: string[]}` |
+| POST | /sessions/<wbr>{id}/<wbr>channels | `{name: string}` | `201` + `{id: string, sessionId: string, name: string, createdAt: string}` |
+| GET | /sessions/<wbr>{id}/<wbr>channels | `?playerId=string` (optional) | `{sessionId: string, playerId: string, channels: string[]}` |
+| GET | /sessions/<wbr>{id}/<wbr>channels/<wbr>{channel} | — | the channel shape |
+| PATCH | /sessions/<wbr>{id}/<wbr>channels/<wbr>{channel} | `{name: string}` | the channel shape |
+| DELETE | /sessions/<wbr>{id}/<wbr>channels/<wbr>{channel} | — | — (`204`, no body) |
+| POST | /sessions/<wbr>{id}/<wbr>members | `{playerId: string, role: string, channels: string[]}` | `{sessionId: string, playerId: string, role: string, channels: string[], joinedAt: string}` |
+| GET | /sessions/<wbr>{id}/<wbr>members | — | `{sessionId: string, count: int, members: [member]}` |
+| GET | /sessions/<wbr>{id}/<wbr>members/<wbr>{playerId} | — | the member shape |
+| DELETE | /sessions/<wbr>{id}/<wbr>members/<wbr>{playerId} | — | — (`204`, no body) |
+| POST | /sessions/<wbr>{id}/<wbr>channels/<wbr>{channel}/<wbr>messages | `{senderId: string, content: string}` | `201` + `{id: string, channelId: string, senderId: string, content: string, timestamp: string, editedAt?: string}` |
+| GET | /sessions/<wbr>{id}/<wbr>channels/<wbr>{channel}/<wbr>messages | `?playerId=string` `&limit=int` `&before=RFC3339` (limit 1-200, default 50) | `{sessionId: string, channel: string, count: int, messages: [message]}` |
+| GET | /sessions/<wbr>{id}/<wbr>channels/<wbr>{channel}/<wbr>messages/<wbr>{messageId} | `?playerId=string` | the message shape |
+| PATCH | /sessions/<wbr>{id}/<wbr>channels/<wbr>{channel}/<wbr>messages/<wbr>{messageId} | `{senderId: string, content: string}` | the message shape |
+| DELETE | /sessions/<wbr>{id}/<wbr>channels/<wbr>{channel}/<wbr>messages/<wbr>{messageId} | `?playerId=string` | — (`204`, no body) |
+| WS | /ws/<wbr>sessions/<wbr>{id}/<wbr>channels/<wbr>{channel} | `?playerId=string`, then `{senderId: string, content: string}` per message | `{senderId: string, content: string, timestamp: string}` to every listener on the channel |
+
+Notes for callers:
+
+- `role` is `moderator` or `junior`. A moderator reaches every channel of the session; a junior moderator needs at least one channel in `channels` and only reaches those.
+- The message endpoints and the WebSocket act on behalf of a player (`playerId`, or `senderId` when posting or editing): `422` when it is missing, `404` when the session has no such channel, `403` when the player was not assigned it.
+- A message is `403` to edit unless `senderId` is its author, and `403` to delete unless the player is its author or the session's moderator.
+- `/status` answers `503` with `status: "degraded"` when MongoDB is unreachable.
+- `POST /sessions/{id}/bootstrap` creates the four default channels and is safe to call twice.
+- `GET /sessions/{id}/channels` returns only that player's channels when `playerId` is given.
+- Renaming a channel keeps its id, its messages and its access grants. Deleting a channel deletes its messages.
+- `POST /sessions/{id}/members` replaces the player's assignment when called again.
+- Messages come back oldest first. A message posted over HTTP is also sent to every WebSocket listener on the channel, and every message is stored before it is sent.
+- Errors come back as `{error: {code: string, message: string}}`.
 
 ### Shared Enumerations and Field Formats
 
