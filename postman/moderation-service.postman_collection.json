@@ -2,11 +2,11 @@
   "info": {
     "_postman_id": "9c4e7a12-8b03-4d55-a1e6-2f7b5c9d0e02",
     "name": "Moderation Service",
-    "description": "Every HTTP endpoint of the Moderation Service (Team 18, PAD project \"Student ID, Please\"), ordered as a walkthrough of one shift: call three applicants, look the calls up, revise one of them, read the shift summary, then clean up.\n\nRun it top to bottom with the Collection Runner against a running stack (`./scripts/run.sh`, or `docker compose up -d`). Each request asserts its own status code and the decision id is passed between requests through a collection variable.\n\nThe applicant ids are not arbitrary. While the Applicant, Credential, Server Rules and University Record Services are not deployed yet, this service simulates them, and the simulated applicant is derived from the applicant id - so the same id is always the same person and the assertions below hold every run:\n\n- `applicant-1006` is a clean, enrolled student, so **accept** is the right call\n- `applicant-1000` presents a forged student ID, so **reject** is the right call\n- `applicant-1026` was banned from the server before, so **ban** is the right call\n\nOnce a teammate deploys the real service, set its URL in `.env` and the same requests are answered from live data instead.",
+    "description": "Every HTTP endpoint of the Moderation Service (Team 18, PAD project \"Student ID, Please\"), ordered as a walkthrough of one shift: call three applicants, look the calls up, revise one of them, read the shift summary, then clean up.\n\nRun it top to bottom with the Collection Runner against a running stack (`./scripts/run.sh`, or `docker compose up -d`). Each request asserts its own status code and the decision id is passed between requests through a collection variable.\n\nThe applicant ids are not arbitrary. While the Applicant, Credential, Server Rules and University Record Services are not deployed yet, this service simulates them, and the simulated applicant is derived from the applicant id - so the same id is always the same person and the assertions below hold every run:\n\n- `applicant-1006` is a clean, enrolled student, so **accept** is the right call\n- `applicant-1000` presents a forged student ID, so **reject** is the right call\n- `applicant-1026` was banned from the server before, so **ban** is the right call\n\nOnce a teammate deploys the real service, set its URL in `.env` and the same requests are answered from live data instead.\n\nThe collection is re-runnable: the first request under **Decisions** gives each run its own `sessionId` (`shift-<timestamp>`), because the service records one decision per applicant per session and would otherwise answer `409` on a second run.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    { "key": "baseUrl", "value": "http://localhost:8081" },
+    { "key": "baseUrl", "value": "http://localhost:3007" },
     { "key": "sessionId", "value": "shift-001" },
     { "key": "moderatorId", "value": "player-moderator-1" },
     { "key": "cleanApplicant", "value": "applicant-1006" },
@@ -67,6 +67,18 @@
           },
           "event": [
             {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Give every run its own shift. The service records one decision per",
+                  "// applicant per session, so a second run against a fixed sessionId would",
+                  "// answer 409 where the requests below expect 201.",
+                  "pm.collectionVariables.set('sessionId', 'shift-' + Date.now());"
+                ]
+              }
+            },
+            {
               "listen": "test",
               "script": {
                 "type": "text/javascript",
@@ -115,7 +127,7 @@
                   "    pm.response.to.have.status(409);",
                   "});",
                   "pm.test('the error explains how to revise the call instead', function () {",
-                  "    pm.expect(pm.response.json().error).to.include('PATCH');",
+                  "    pm.expect(pm.response.json().error.message).to.include('PATCH');",
                   "});"
                 ]
               }
@@ -222,10 +234,10 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('an unknown decision is refused', function () {",
-                  "    pm.response.to.have.status(400);",
+                  "    pm.response.to.have.status(422);",
                   "});",
                   "pm.test('the error lists the decisions that do exist', function () {",
-                  "    pm.expect(pm.response.json().error).to.include('accept');",
+                  "    pm.expect(pm.response.json().error.message).to.include('accept');",
                   "});"
                 ]
               }
@@ -285,7 +297,7 @@
                   "    pm.response.to.have.status(404);",
                   "});",
                   "pm.test('the error is the standard shape', function () {",
-                  "    pm.expect(pm.response.json()).to.have.property('error');",
+                  "    pm.expect(pm.response.json().error).to.have.property('code', 'NOT_FOUND');",
                   "});"
                 ]
               }
@@ -419,7 +431,7 @@
                 "type": "text/javascript",
                 "exec": [
                   "pm.test('a limit below 1 is refused', function () {",
-                  "    pm.response.to.have.status(400);",
+                  "    pm.response.to.have.status(422);",
                   "});"
                 ]
               }
