@@ -1,0 +1,535 @@
+{
+  "info": {
+    "_postman_id": "9c4e7a12-8b03-4d55-a1e6-2f7b5c9d0e02",
+    "name": "Moderation Service",
+    "description": "Every HTTP endpoint of the Moderation Service (Team 18, PAD project \"Student ID, Please\"), ordered as a walkthrough of one shift: call three applicants, look the calls up, revise one of them, read the shift summary, then clean up.\n\nRun it top to bottom with the Collection Runner against a running stack (`./scripts/run.sh`, or `docker compose up -d`). Each request asserts its own status code and the decision id is passed between requests through a collection variable.\n\nThe applicant ids are not arbitrary. While the Applicant, Credential, Server Rules and University Record Services are not deployed yet, this service simulates them, and the simulated applicant is derived from the applicant id - so the same id is always the same person and the assertions below hold every run:\n\n- `applicant-1006` is a clean, enrolled student, so **accept** is the right call\n- `applicant-1000` presents a forged student ID, so **reject** is the right call\n- `applicant-1026` was banned from the server before, so **ban** is the right call\n\nOnce a teammate deploys the real service, set its URL in `.env` and the same requests are answered from live data instead.\n\nThe collection is re-runnable: the first request under **Decisions** gives each run its own `sessionId` (`shift-<timestamp>`), because the service records one decision per applicant per session and would otherwise answer `409` on a second run.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:3007" },
+    { "key": "sessionId", "value": "shift-001" },
+    { "key": "moderatorId", "value": "player-moderator-1" },
+    { "key": "cleanApplicant", "value": "applicant-1006" },
+    { "key": "forgedApplicant", "value": "applicant-1000" },
+    { "key": "bannedApplicant", "value": "applicant-1026" },
+    { "key": "decisionId", "value": "" },
+    { "key": "throwawayDecisionId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Get service status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/status", "host": ["{{baseUrl}}"], "path": ["status"] },
+            "description": "Reports whether the service is up and whether it can reach PostgreSQL."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the service is up', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test('the database is reachable', function () {",
+                  "    pm.expect(pm.response.json().database).to.eql('up');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Decisions",
+      "item": [
+        {
+          "name": "Accept a clean student (a correct call)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"sessionId\": \"{{sessionId}}\",\n    \"applicantId\": \"{{cleanApplicant}}\",\n    \"decision\": \"accept\",\n    \"decidedBy\": \"{{moderatorId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/moderation/decide",
+              "host": ["{{baseUrl}}"],
+              "path": ["moderation", "decide"]
+            },
+            "description": "The moderator lets an enrolled student in. The service gathers the applicant's profile, credentials, the current rules and the university records - all four at once - and agrees with the call, so nothing is deducted."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Give every run its own shift. The service records one decision per",
+                  "// applicant per session, so a second run against a fixed sessionId would",
+                  "// answer 409 where the requests below expect 201.",
+                  "pm.collectionVariables.set('sessionId', 'shift-' + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the decision was recorded', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "const body = pm.response.json();",
+                  "pm.test('accepting a clean student is the right call', function () {",
+                  "    pm.expect(body.correct).to.be.true;",
+                  "    pm.expect(body.expectedDecision).to.eql('accept');",
+                  "});",
+                  "pm.test('a correct call costs nothing', function () {",
+                  "    pm.expect(body.penalty).to.eql(0);",
+                  "    pm.expect(body.violatedRules).to.be.an('array').that.is.empty;",
+                  "});",
+                  "pm.collectionVariables.set('throwawayDecisionId', body.decisionId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Decide on the same applicant twice",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"sessionId\": \"{{sessionId}}\",\n    \"applicantId\": \"{{cleanApplicant}}\",\n    \"decision\": \"reject\",\n    \"decidedBy\": \"{{moderatorId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/moderation/decide",
+              "host": ["{{baseUrl}}"],
+              "path": ["moderation", "decide"]
+            },
+            "description": "An applicant is called once per shift. A second call on the same applicant is refused and the error points at the endpoint that revises a decision instead."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the second call is refused', function () {",
+                  "    pm.response.to.have.status(409);",
+                  "});",
+                  "pm.test('the error explains how to revise the call instead', function () {",
+                  "    pm.expect(pm.response.json().error.message).to.include('PATCH');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Accept a forged student ID (a wrong call)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"sessionId\": \"{{sessionId}}\",\n    \"applicantId\": \"{{forgedApplicant}}\",\n    \"decision\": \"accept\",\n    \"decidedBy\": \"{{moderatorId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/moderation/decide",
+              "host": ["{{baseUrl}}"],
+              "path": ["moderation", "decide"]
+            },
+            "description": "The moderator lets somebody in whose student ID does not match any issued card. The evidence called for a rejection, so the shift is penalised - and doubly so, because the mistake was a lenient one."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the decision was recorded', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "const body = pm.response.json();",
+                  "pm.test('the call is marked wrong', function () {",
+                  "    pm.expect(body.correct).to.be.false;",
+                  "    pm.expect(body.expectedDecision).to.eql('reject');",
+                  "});",
+                  "pm.test('the mistake costs the shift something', function () {",
+                  "    pm.expect(body.penalty).to.be.above(0);",
+                  "});",
+                  "pm.test('the reasons against the applicant are recorded', function () {",
+                  "    pm.expect(body.violatedRules).to.be.an('array').that.is.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Flag an applicant who should be banned",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"sessionId\": \"{{sessionId}}\",\n    \"applicantId\": \"{{bannedApplicant}}\",\n    \"decision\": \"flag\",\n    \"decidedBy\": \"{{moderatorId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/moderation/decide",
+              "host": ["{{baseUrl}}"],
+              "path": ["moderation", "decide"]
+            },
+            "description": "The moderator is unsure and flags somebody the server has already banned once. The decision id is kept, because the next request revises this call."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the decision was recorded', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "const body = pm.response.json();",
+                  "pm.test('the evidence called for a ban', function () {",
+                  "    pm.expect(body.expectedDecision).to.eql('ban');",
+                  "    pm.expect(body.correct).to.be.false;",
+                  "});",
+                  "pm.collectionVariables.set('decisionId', body.decisionId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reject an unknown decision word",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"sessionId\": \"{{sessionId}}\",\n    \"applicantId\": \"applicant-9999\",\n    \"decision\": \"kick\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/moderation/decide",
+              "host": ["{{baseUrl}}"],
+              "path": ["moderation", "decide"]
+            },
+            "description": "Only accept, reject, flag and ban exist. Anything else is refused before any other service is called."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('an unknown decision is refused', function () {",
+                  "    pm.response.to.have.status(422);",
+                  "});",
+                  "pm.test('the error lists the decisions that do exist', function () {",
+                  "    pm.expect(pm.response.json().error.message).to.include('accept');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get one decision",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/moderation/{{decisionId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["moderation", "{{decisionId}}"]
+            },
+            "description": "The full audit record: what was decided, what the evidence called for, why, and what it cost."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the decision is found', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "const body = pm.response.json();",
+                  "pm.test('it is the decision that was just taken', function () {",
+                  "    pm.expect(body.decisionId).to.eql(pm.collectionVariables.get('decisionId'));",
+                  "    pm.expect(body.applicantId).to.eql(pm.collectionVariables.get('bannedApplicant'));",
+                  "    pm.expect(body.decision).to.eql('flag');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get a decision that does not exist",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/moderation/11111111-2222-3333-4444-555555555555",
+              "host": ["{{baseUrl}}"],
+              "path": ["moderation", "11111111-2222-3333-4444-555555555555"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('an unknown decision id is a 404', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});",
+                  "pm.test('the error is the standard shape', function () {",
+                  "    pm.expect(pm.response.json().error).to.have.property('code', 'NOT_FOUND');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Revise the call to a ban",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"decision\": \"ban\",\n    \"decidedBy\": \"{{moderatorId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/moderation/{{decisionId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["moderation", "{{decisionId}}"]
+            },
+            "description": "A junior moderator reports back in chat and the moderator changes their mind. The evidence is gathered again rather than reused, since the rules and the records may have moved on since the first call."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the decision was revised', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "const body = pm.response.json();",
+                  "pm.test('the revised call is now the right one', function () {",
+                  "    pm.expect(body.decision).to.eql('ban');",
+                  "    pm.expect(body.correct).to.be.true;",
+                  "    pm.expect(body.penalty).to.eql(0);",
+                  "});",
+                  "pm.test('the decision kept its id and records when it changed', function () {",
+                  "    pm.expect(body.decisionId).to.eql(pm.collectionVariables.get('decisionId'));",
+                  "    pm.expect(body.updatedAt).to.be.a('string');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Audit trail",
+      "item": [
+        {
+          "name": "List the decisions of the shift",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/decisions",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "decisions"]
+            },
+            "description": "Every call taken during one shift, newest first."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the audit trail is returned', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "const body = pm.response.json();",
+                  "pm.test('all three applicants of this run are in it', function () {",
+                  "    pm.expect(body.count).to.be.at.least(3);",
+                  "    pm.expect(body.decisions).to.have.lengthOf(body.count);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List the decisions about one applicant",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/decisions?applicantId={{forgedApplicant}}&limit=10",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "decisions"],
+              "query": [
+                { "key": "applicantId", "value": "{{forgedApplicant}}" },
+                { "key": "limit", "value": "10" }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the list is narrowed to that applicant', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const decisions = pm.response.json().decisions;",
+                  "    pm.expect(decisions).to.have.lengthOf(1);",
+                  "    pm.expect(decisions[0].applicantId).to.eql(pm.collectionVariables.get('forgedApplicant'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reject an impossible limit",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/decisions?limit=0",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "decisions"],
+              "query": [{ "key": "limit", "value": "0" }]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('a limit below 1 is refused', function () {",
+                  "    pm.response.to.have.status(422);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read the shift summary",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sessions/{{sessionId}}/summary",
+              "host": ["{{baseUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "summary"]
+            },
+            "description": "How the shift went: how many applicants were called, how many calls were right, and what the mistakes cost in total. This is what a session score is built from."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the summary is returned', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "const body = pm.response.json();",
+                  "pm.test('it adds up', function () {",
+                  "    pm.expect(body.decisions).to.eql(body.correct + body.incorrect);",
+                  "    pm.expect(body.accuracy).to.be.within(0, 1);",
+                  "});",
+                  "pm.test('the wrong call of this run is still costing the shift', function () {",
+                  "    pm.expect(body.penalty).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Cleanup",
+      "item": [
+        {
+          "name": "Delete a decision",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/moderation/{{throwawayDecisionId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["moderation", "{{throwawayDecisionId}}"]
+            },
+            "description": "Removes a decision from the audit trail. The rules it recorded as violated go with it, through the foreign key's cascade."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the decision is deleted', function () {",
+                  "    pm.response.to.have.status(204);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete it again",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/moderation/{{throwawayDecisionId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["moderation", "{{throwawayDecisionId}}"]
+            },
+            "description": "Deleting is not idempotent on purpose: the second call says the decision is no longer there, which is how a client learns it was already removed."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('a decision can only be deleted once', function () {",
+                  "    pm.response.to.have.status(404);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
