@@ -5,9 +5,18 @@
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    { "key": "baseUrl", "value": "http://localhost:3002" },
-    { "key": "sessionId", "value": "" },
-    { "key": "currentApplicantId", "value": "" }
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3002"
+    },
+    {
+      "key": "sessionId",
+      "value": ""
+    },
+    {
+      "key": "currentApplicantId",
+      "value": ""
+    }
   ],
   "item": [
     {
@@ -30,7 +39,15 @@
       ],
       "request": {
         "method": "GET",
-        "url": { "raw": "{{baseUrl}}/status", "host": ["{{baseUrl}}"], "path": ["status"] }
+        "url": {
+          "raw": "{{baseUrl}}/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "status"
+          ]
+        }
       }
     },
     {
@@ -54,12 +71,66 @@
       ],
       "request": {
         "method": "POST",
-        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
         "body": {
           "mode": "raw",
           "raw": "{\n  \"moderatorId\": \"p_mod1\",\n  \"juniorIds\": [\"p_jr1\", \"p_jr2\"]\n}"
         },
-        "url": { "raw": "{{baseUrl}}/sessions", "host": ["{{baseUrl}}"], "path": ["sessions"] }
+        "url": {
+          "raw": "{{baseUrl}}/sessions",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "sessions"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Create Session Without ModeratorId",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('missing moderatorId is rejected', function () {",
+              "    pm.response.to.have.status(400);",
+              "    pm.expect(json.error.code).to.eql('VALIDATION_FAILED');",
+              "    pm.expect(json.error.message).to.be.a('string');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/sessions",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "sessions"
+          ]
+        }
       }
     },
     {
@@ -83,12 +154,27 @@
       ],
       "request": {
         "method": "POST",
-        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
         "body": {
           "mode": "raw",
           "raw": "{\n  \"playerId\": \"p_jr3\",\n  \"role\": \"junior\"\n}"
         },
-        "url": { "raw": "{{baseUrl}}/sessions/{{sessionId}}/join", "host": ["{{baseUrl}}"], "path": ["sessions", "{{sessionId}}", "join"] }
+        "url": {
+          "raw": "{{baseUrl}}/sessions/{{sessionId}}/join",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "sessions",
+            "{{sessionId}}",
+            "join"
+          ]
+        }
       }
     },
     {
@@ -119,7 +205,17 @@
       ],
       "request": {
         "method": "POST",
-        "url": { "raw": "{{baseUrl}}/sessions/{{sessionId}}/process-applicant", "host": ["{{baseUrl}}"], "path": ["sessions", "{{sessionId}}", "process-applicant"] }
+        "url": {
+          "raw": "{{baseUrl}}/sessions/{{sessionId}}/process-applicant",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "sessions",
+            "{{sessionId}}",
+            "process-applicant"
+          ]
+        }
       }
     },
     {
@@ -144,7 +240,16 @@
       ],
       "request": {
         "method": "GET",
-        "url": { "raw": "{{baseUrl}}/sessions/{{sessionId}}", "host": ["{{baseUrl}}"], "path": ["sessions", "{{sessionId}}"] }
+        "url": {
+          "raw": "{{baseUrl}}/sessions/{{sessionId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "sessions",
+            "{{sessionId}}"
+          ]
+        }
       }
     },
     {
@@ -168,7 +273,49 @@
       ],
       "request": {
         "method": "POST",
-        "url": { "raw": "{{baseUrl}}/sessions/{{sessionId}}/end", "host": ["{{baseUrl}}"], "path": ["sessions", "{{sessionId}}", "end"] }
+        "url": {
+          "raw": "{{baseUrl}}/sessions/{{sessionId}}/end",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "sessions",
+            "{{sessionId}}",
+            "end"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Get Nonexistent Session",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('nonexistent session is a 404', function () {",
+              "    pm.response.to.have.status(404);",
+              "    pm.expect(json.error.code).to.eql('NOT_FOUND');",
+              "    pm.expect(json.error.message).to.be.a('string');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/sessions/does-not-exist",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "sessions",
+            "does-not-exist"
+          ]
+        }
       }
     }
   ]
