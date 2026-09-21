@@ -5,18 +5,9 @@
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    {
-      "key": "baseUrl",
-      "value": "http://localhost:3001"
-    },
-    {
-      "key": "playerId",
-      "value": ""
-    },
-    {
-      "key": "username",
-      "value": ""
-    }
+    { "key": "baseUrl", "value": "http://localhost:3001" },
+    { "key": "playerId", "value": "" },
+    { "key": "username", "value": "" }
   ],
   "item": [
     {
@@ -41,12 +32,8 @@
         "method": "GET",
         "url": {
           "raw": "{{baseUrl}}/status",
-          "host": [
-            "{{baseUrl}}"
-          ],
-          "path": [
-            "status"
-          ]
+          "host": [ "{{baseUrl}}" ],
+          "path": [ "status" ]
         }
       }
     },
@@ -84,10 +71,7 @@
       "request": {
         "method": "POST",
         "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
+          { "key": "Content-Type", "value": "application/json" }
         ],
         "body": {
           "mode": "raw",
@@ -95,13 +79,42 @@
         },
         "url": {
           "raw": "{{baseUrl}}/players/register",
-          "host": [
-            "{{baseUrl}}"
-          ],
-          "path": [
-            "players",
-            "register"
-          ]
+          "host": [ "{{baseUrl}}" ],
+          "path": [ "players", "register" ]
+        }
+      }
+    },
+    {
+      "name": "Register Duplicate Username",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('duplicate username is rejected', function () {",
+              "    pm.response.to.have.status(409);",
+              "    pm.expect(json.error.code).to.eql('CONFLICT');",
+              "    pm.expect(json.error.message).to.be.a('string');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"username\": \"{{username}}\",\n  \"email\": \"m2@test.com\",\n  \"password\": \"pw123\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/players/register",
+          "host": [ "{{baseUrl}}" ],
+          "path": [ "players", "register" ]
         }
       }
     },
@@ -128,10 +141,7 @@
       "request": {
         "method": "POST",
         "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
+          { "key": "Content-Type", "value": "application/json" }
         ],
         "body": {
           "mode": "raw",
@@ -139,13 +149,8 @@
         },
         "url": {
           "raw": "{{baseUrl}}/players/login",
-          "host": [
-            "{{baseUrl}}"
-          ],
-          "path": [
-            "players",
-            "login"
-          ]
+          "host": [ "{{baseUrl}}" ],
+          "path": [ "players", "login" ]
         }
       }
     },
@@ -173,13 +178,8 @@
         "method": "GET",
         "url": {
           "raw": "{{baseUrl}}/players/{{playerId}}",
-          "host": [
-            "{{baseUrl}}"
-          ],
-          "path": [
-            "players",
-            "{{playerId}}"
-          ]
+          "host": [ "{{baseUrl}}" ],
+          "path": [ "players", "{{playerId}}" ]
         }
       }
     },
@@ -206,10 +206,7 @@
       "request": {
         "method": "PATCH",
         "header": [
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
+          { "key": "Content-Type", "value": "application/json" }
         ],
         "body": {
           "mode": "raw",
@@ -217,14 +214,8 @@
         },
         "url": {
           "raw": "{{baseUrl}}/players/{{playerId}}/xp",
-          "host": [
-            "{{baseUrl}}"
-          ],
-          "path": [
-            "players",
-            "{{playerId}}",
-            "xp"
-          ]
+          "host": [ "{{baseUrl}}" ],
+          "path": [ "players", "{{playerId}}", "xp" ]
         }
       }
     },
@@ -248,13 +239,35 @@
         "method": "DELETE",
         "url": {
           "raw": "{{baseUrl}}/players/{{playerId}}",
-          "host": [
-            "{{baseUrl}}"
-          ],
-          "path": [
-            "players",
-            "{{playerId}}"
-          ]
+          "host": [ "{{baseUrl}}" ],
+          "path": [ "players", "{{playerId}}" ]
+        }
+      }
+    },
+    {
+      "name": "Get Nonexistent Player",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('nonexistent player is a 404', function () {",
+              "    pm.response.to.have.status(404);",
+              "    pm.expect(json.error.code).to.eql('NOT_FOUND');",
+              "    pm.expect(json.error.message).to.be.a('string');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/players/does-not-exist",
+          "host": [ "{{baseUrl}}" ],
+          "path": [ "players", "does-not-exist" ]
         }
       }
     }
