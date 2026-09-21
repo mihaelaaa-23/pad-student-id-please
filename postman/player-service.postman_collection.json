@@ -5,19 +5,22 @@
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    { "key": "baseUrl", "value": "http://localhost:3001" },
-    { "key": "playerId", "value": "" }
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3001"
+    },
+    {
+      "key": "playerId",
+      "value": ""
+    },
+    {
+      "key": "username",
+      "value": ""
+    }
   ],
   "item": [
     {
-      "name": "Health Check",
-      "request": {
-        "method": "GET",
-        "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] }
-      }
-    },
-    {
-      "name": "Register Player",
+      "name": "Status Check",
       "event": [
         {
           "listen": "test",
@@ -25,57 +28,234 @@
             "type": "text/javascript",
             "exec": [
               "const json = pm.response.json();",
-              "if (json.playerId) { pm.collectionVariables.set('playerId', json.playerId); }"
+              "pm.test('service reports ok', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(json.status).to.eql('ok');",
+              "    pm.expect(json.database).to.eql('up');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "status"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Register Player",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.collectionVariables.set('username', 'mihaela_' + Date.now());"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('player was created', function () {",
+              "    pm.response.to.have.status(201);",
+              "});",
+              "pm.test('response has the contract shape', function () {",
+              "    pm.expect(json).to.have.all.keys('playerId', 'username', 'level', 'xp');",
+              "    pm.expect(json.level).to.eql(1);",
+              "    pm.expect(json.xp).to.eql(0);",
+              "});",
+              "pm.collectionVariables.set('playerId', json.playerId);"
             ]
           }
         }
       ],
       "request": {
         "method": "POST",
-        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"username\": \"mihaela\",\n  \"email\": \"m@test.com\",\n  \"password\": \"pw123\"\n}"
+          "raw": "{\n  \"username\": \"{{username}}\",\n  \"email\": \"m@test.com\",\n  \"password\": \"pw123\"\n}"
         },
-        "url": { "raw": "{{baseUrl}}/players/register", "host": ["{{baseUrl}}"], "path": ["players", "register"] }
+        "url": {
+          "raw": "{{baseUrl}}/players/register",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "players",
+            "register"
+          ]
+        }
       }
     },
     {
       "name": "Login Player",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('login succeeded', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "pm.test('response has token and playerId', function () {",
+              "    pm.expect(json.token).to.be.a('string');",
+              "    pm.expect(json.playerId).to.eql(pm.collectionVariables.get('playerId'));",
+              "});"
+            ]
+          }
+        }
+      ],
       "request": {
         "method": "POST",
-        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"username\": \"mihaela\",\n  \"password\": \"pw123\"\n}"
+          "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"pw123\"\n}"
         },
-        "url": { "raw": "{{baseUrl}}/players/login", "host": ["{{baseUrl}}"], "path": ["players", "login"] }
+        "url": {
+          "raw": "{{baseUrl}}/players/login",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "players",
+            "login"
+          ]
+        }
       }
     },
     {
       "name": "Get Player",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('player is returned', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "pm.test('has the expected fields', function () {",
+              "    pm.expect(json.playerId).to.eql(pm.collectionVariables.get('playerId'));",
+              "    pm.expect(json.friends).to.be.an('array');",
+              "});"
+            ]
+          }
+        }
+      ],
       "request": {
         "method": "GET",
-        "url": { "raw": "{{baseUrl}}/players/{{playerId}}", "host": ["{{baseUrl}}"], "path": ["players", "{{playerId}}"] }
+        "url": {
+          "raw": "{{baseUrl}}/players/{{playerId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "players",
+            "{{playerId}}"
+          ]
+        }
       }
     },
     {
       "name": "Update Player XP",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('xp was updated', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "pm.test('xp and level match the leveling formula', function () {",
+              "    pm.expect(json.xp).to.eql(150);",
+              "    pm.expect(json.level).to.eql(1 + Math.floor(150 / 100));",
+              "});"
+            ]
+          }
+        }
+      ],
       "request": {
         "method": "PATCH",
-        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
         "body": {
           "mode": "raw",
           "raw": "{\n  \"xpGained\": 150,\n  \"reason\": \"test\"\n}"
         },
-        "url": { "raw": "{{baseUrl}}/players/{{playerId}}/xp", "host": ["{{baseUrl}}"], "path": ["players", "{{playerId}}", "xp"] }
+        "url": {
+          "raw": "{{baseUrl}}/players/{{playerId}}/xp",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "players",
+            "{{playerId}}",
+            "xp"
+          ]
+        }
       }
     },
     {
       "name": "Delete Player",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('player was deleted', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(pm.response.json().deleted).to.be.true;",
+              "});"
+            ]
+          }
+        }
+      ],
       "request": {
         "method": "DELETE",
-        "url": { "raw": "{{baseUrl}}/players/{{playerId}}", "host": ["{{baseUrl}}"], "path": ["players", "{{playerId}}"] }
+        "url": {
+          "raw": "{{baseUrl}}/players/{{playerId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "players",
+            "{{playerId}}"
+          ]
+        }
       }
     }
   ]
