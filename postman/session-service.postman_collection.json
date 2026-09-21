@@ -6,14 +6,31 @@
   },
   "variable": [
     { "key": "baseUrl", "value": "http://localhost:3002" },
-    { "key": "sessionId", "value": "" }
+    { "key": "sessionId", "value": "" },
+    { "key": "currentApplicantId", "value": "" }
   ],
   "item": [
     {
-      "name": "Health Check",
+      "name": "Status Check",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('service reports ok', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(json.status).to.eql('ok');",
+              "    pm.expect(json.database).to.eql('up');",
+              "});"
+            ]
+          }
+        }
+      ],
       "request": {
         "method": "GET",
-        "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] }
+        "url": { "raw": "{{baseUrl}}/status", "host": ["{{baseUrl}}"], "path": ["status"] }
       }
     },
     {
@@ -25,7 +42,12 @@
             "type": "text/javascript",
             "exec": [
               "const json = pm.response.json();",
-              "if (json.sessionId) { pm.collectionVariables.set('sessionId', json.sessionId); }"
+              "pm.test('session was created', function () {",
+              "    pm.response.to.have.status(201);",
+              "    pm.expect(json.sessionId).to.be.a('string');",
+              "    pm.expect(json.status).to.eql('active');",
+              "});",
+              "pm.collectionVariables.set('sessionId', json.sessionId);"
             ]
           }
         }
@@ -42,6 +64,23 @@
     },
     {
       "name": "Join Session",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('junior moderator joined', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(json.sessionId).to.eql(pm.collectionVariables.get('sessionId'));",
+              "    pm.expect(json.role).to.eql('junior');",
+              "    pm.expect(json.status).to.eql('active');",
+              "});"
+            ]
+          }
+        }
+      ],
       "request": {
         "method": "POST",
         "header": [{ "key": "Content-Type", "value": "application/json" }],
@@ -53,7 +92,56 @@
       }
     },
     {
+      "name": "Process Applicant",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('applicant was processed', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(json.sessionId).to.eql(pm.collectionVariables.get('sessionId'));",
+              "    pm.expect(json.processedCount).to.eql(1);",
+              "    pm.expect(json.currentApplicantId).to.be.a('string');",
+              "});",
+              "pm.test('mocked dependency responses have the contract shape', function () {",
+              "    pm.expect(json.applicant).to.include.all.keys('applicantId', 'name', 'studentId', 'major', 'role', 'status');",
+              "    pm.expect(json.credentialCheck).to.include.all.keys('applicantId', 'valid', 'issues');",
+              "    pm.expect(json.rulesCheck).to.include.all.keys('passed', 'violatedRules');",
+              "    pm.expect(json.universityRecords).to.include.all.keys('applicantId', 'fields');",
+              "});",
+              "pm.collectionVariables.set('currentApplicantId', json.currentApplicantId);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": { "raw": "{{baseUrl}}/sessions/{{sessionId}}/process-applicant", "host": ["{{baseUrl}}"], "path": ["sessions", "{{sessionId}}", "process-applicant"] }
+      }
+    },
+    {
       "name": "Get Session",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('session reflects the processed applicant', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(json.sessionId).to.eql(pm.collectionVariables.get('sessionId'));",
+              "    pm.expect(json.currentApplicantId).to.eql(pm.collectionVariables.get('currentApplicantId'));",
+              "    pm.expect(json.processedCount).to.eql(1);",
+              "    pm.expect(json.status).to.eql('active');",
+              "});"
+            ]
+          }
+        }
+      ],
       "request": {
         "method": "GET",
         "url": { "raw": "{{baseUrl}}/sessions/{{sessionId}}", "host": ["{{baseUrl}}"], "path": ["sessions", "{{sessionId}}"] }
@@ -61,6 +149,23 @@
     },
     {
       "name": "End Session",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('session was ended', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(json.sessionId).to.eql(pm.collectionVariables.get('sessionId'));",
+              "    pm.expect(['passed', 'failed']).to.include(json.result);",
+              "    pm.expect(json.score).to.be.a('number');",
+              "});"
+            ]
+          }
+        }
+      ],
       "request": {
         "method": "POST",
         "url": { "raw": "{{baseUrl}}/sessions/{{sessionId}}/end", "host": ["{{baseUrl}}"], "path": ["sessions", "{{sessionId}}", "end"] }
