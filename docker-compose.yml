@@ -231,21 +231,19 @@ services:
       timeout: 5s
       retries: 5
 
-  # ==================== Discord DMs Service (Liviu) — PLACEHOLDER ====================
+  # ==================== Discord DMs Service (Liviu) ====================
   discord-dms-service:
-    image: <LIVIU_DOCKERHUB_USER>/discord-dms-service:<VERSION>
+    image: d3adeye/discord-dms-service:0.2.0
     restart: unless-stopped
     ports:
-      - "<PORT>:<PORT>"
+      - "3008:3008"
     environment:
-      PORT: <PORT>
-      DB_HOST: discord-dms-db
-      DB_PORT: 27017
-      DB_USER: ${DISCORD_DMS_DB_USER}
-      DB_PASSWORD: ${DISCORD_DMS_DB_PASSWORD}
-      DB_NAME: ${DISCORD_DMS_DB_NAME}
+      PORT: 3008
+      MONGODB_URI: mongodb://${DISCORD_DMS_DB_USER}:${DISCORD_DMS_DB_PASSWORD}@discord-dms-db:27017/?authSource=admin
+      MONGODB_DATABASE: ${DISCORD_DMS_DB_NAME}
     depends_on:
-      - discord-dms-db
+      discord-dms-db:
+        condition: service_healthy
 
   discord-dms-db:
     image: mongo:7
@@ -256,7 +254,12 @@ services:
       MONGO_INITDB_DATABASE: ${DISCORD_DMS_DB_NAME}
     volumes:
       - discord_dms_db_data:/data/db
-      - ./db/discord-dms-service/init.js:/docker-entrypoint-initdb.d/init.js
+      - ./db/discord-dms-service/init.js:/docker-entrypoint-initdb.d/init.js:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\""]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
 volumes:
   player_db_data:
