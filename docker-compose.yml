@@ -138,19 +138,21 @@ services:
       timeout: 5s
       retries: 5
 
-  # ==================== Server Rules Service (Ion) — PLACEHOLDER ====================
+  # ==================== Server Rules Service (Ion) ====================
   server-rules-service:
-    image: <ION_DOCKERHUB_USER>/server-rules-service:<VERSION>
+    image: ion190/server-rules-service:0.3.0
     restart: unless-stopped
     ports:
-      - "<PORT>:<PORT>"
+      - "3005:3005"
     environment:
-      PORT: <PORT>
+      PORT: 3005
       DB_HOST: rules-db
       DB_PORT: 27017
       DB_USER: ${RULES_DB_USER}
       DB_PASSWORD: ${RULES_DB_PASSWORD}
       DB_NAME: ${RULES_DB_NAME}
+      UNIVERSITY_RECORD_SERVICE_URL: http://university-record-service:3006
+      MOCK_EXTERNAL_SERVICES: "true"
     depends_on:
       - rules-db
 
@@ -163,7 +165,12 @@ services:
       MONGO_INITDB_DATABASE: ${RULES_DB_NAME}
     volumes:
       - rules_db_data:/data/db
-      - ./db/server-rules-service/init.js:/docker-entrypoint-initdb.d/init.js
+      - ./db/server-rules-service/init.js:/docker-entrypoint-initdb.d/init.js:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\""]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   # ==================== University Record Service (Ion) — PLACEHOLDER ====================
   university-record-service:
