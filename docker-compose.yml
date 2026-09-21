@@ -198,14 +198,15 @@ services:
       timeout: 5s
       retries: 5
 
-  # ==================== Moderation Service (Liviu) — PLACEHOLDER ====================
+  # ==================== Moderation Service (Liviu) ====================
   moderation-service:
-    image: <LIVIU_DOCKERHUB_USER>/moderation-service:<VERSION>
+    image: d3adeye/moderation-service:0.2.0
     restart: unless-stopped
     ports:
-      - "<PORT>:<PORT>"
+      - "3007:3007"
     environment:
-      PORT: <PORT>
+      PORT: 3007
+      DISCORD_DMS_SERVICE_URL: http://discord-dms-service:3008
       DB_HOST: moderation-db
       DB_PORT: 5432
       DB_USER: ${MODERATION_DB_USER}
@@ -224,7 +225,7 @@ services:
       POSTGRES_DB: ${MODERATION_DB_NAME}
     volumes:
       - moderation_db_data:/var/lib/postgresql/data
-      - ./db/moderation-service/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./db/moderation-service/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${MODERATION_DB_USER} -d ${MODERATION_DB_NAME}"]
       interval: 5s
