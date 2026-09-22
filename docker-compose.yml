@@ -154,7 +154,8 @@ services:
       UNIVERSITY_RECORD_SERVICE_URL: http://university-record-service:3006
       MOCK_EXTERNAL_SERVICES: "true"
     depends_on:
-      - rules-db
+      rules-db:
+        condition: service_healthy
 
   rules-db:
     image: mongo:7
