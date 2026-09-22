@@ -183,6 +183,7 @@ This has a few direct consequences for how the system behaves:
 | POST | /applicants/generate | — | `{applicantId: string, name: string, studentId: string, major: string, year: int\|null, role: string, status: string}` |
 | GET | /applicants/{id} | — | `{applicantId: string, name: string, studentId: string, major: string, year: int\|null, role: string, status: string}` |
 | GET | /health | — | `{status: "ok"}` |
+| GET | /status | — | `{service: string, status: string, database: string, time: string}` — `503` with `status: "degraded"` and `database: "down"` when MongoDB is unreachable |
 | POST | /applicants | `{name: string, studentId: string, major: string, year: int\|null, role: string, status: string}` | `201` + `{applicantId: string, name: string, studentId: string, major: string, year: int\|null, role: string, status: string}` |
 | GET | /applicants | `?role=string&limit=int&cursor=string` (limit 1-100, default 20) | `{items: [applicant], nextCursor: string\|null}` |
 | PATCH | /applicants/{id} | any subset of `{name, major, year, role, status}` | the full applicant shape |
@@ -194,6 +195,7 @@ This has a few direct consequences for how the system behaves:
 | GET | /credentials/{applicantId} | — | `{applicantId: string, studentIdCard: string, universityEmail: string, valid: boolean, issues: string[]}` |
 | POST | /credentials/{applicantId}/validate | — | `{applicantId: string, valid: boolean, issues: string[]}` |
 | GET | /health | — | `{status: "ok"}` |
+| GET | /status | — | `{service: string, status: string, database: string, time: string}` — `503` with `status: "degraded"` and `database: "down"` when MongoDB is unreachable |
 | POST | /credentials/{applicantId} | `{core?: {name, studentId, major, year, role, status}, scenario?: string, seed?: int}` | `201` + `{applicantId: string, studentIdCard: string, universityEmail: string, valid: boolean, issues: string[]}` |
 | GET | /credentials | `?limit=int&cursor=string` (limit 1-100, default 20) | `{items: [credential], nextCursor: string\|null}` |
 | PATCH | /credentials/{applicantId} | any subset of `{holderName, expiresAt, documents}` | the credential shape |
@@ -434,8 +436,8 @@ Each service is pushed to DockerHub as a versioned, public image — no Dockerfi
 |---|---|---|
 | Player Service | `mihaela5/player-service:0.3.0` | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` |
 | Server Moderation Session Service | `mihaela5/session-service:0.3.0` | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` — if unset, falls back to mocked responses for those dependencies |
-| Applicant Service | `ciprik13/applicant-service:0.3.0` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `STORE_DRIVER` (`mongo` by default, `memory` runs without a database) and `DECEPTIVE_RATE` (share of deceptive applicants, `0.35` by default) |
-| Credential Service | `ciprik13/credential-service:0.3.0` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `CREDENTIAL_SIGNING_SECRET` (HMAC secret for credential authenticity — without it the service falls back to a development secret and credentials issued elsewhere are reported as `FORGED_SIGNATURE`); optionally `STORE_DRIVER` (`mongo` by default, `memory` runs without a database) |
+| Applicant Service | `ciprik13/applicant-service:0.4.0` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `STORE_DRIVER` (`mongo` by default, `memory` runs without a database), `DECEPTIVE_RATE` (share of deceptive applicants, `0.35` by default), `UNIVERSITY_RECORD_SERVICE_URL` (if unset, University Record is mocked) and `HTTP_TIMEOUT_MS` (`2000` by default) |
+| Credential Service | `ciprik13/credential-service:0.4.0` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `CREDENTIAL_SIGNING_SECRET` (HMAC secret for credential authenticity — without it the service falls back to a development secret and credentials issued elsewhere are reported as `FORGED_SIGNATURE`); optionally `STORE_DRIVER` (`mongo` by default, `memory` runs without a database), `APPLICANT_SERVICE_URL` (if unset, Applicant Service is mocked) and `HTTP_TIMEOUT_MS` (`2000` by default) |
 | Server Rules Service | *pending* | |
 | University Record Service | *pending* | |
 | Moderation Service | `d3adeye/moderation-service:0.2.0` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` — if unset, falls back to mocked responses for those dependencies — and `DISCORD_DMS_SERVICE_URL` (verdicts are not posted to chat when unset) |
