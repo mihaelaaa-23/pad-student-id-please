@@ -1,0 +1,341 @@
+{
+  "info": {
+    "_postman_id": "c4b9a7d2-6e41-4f83-b2d7-university-record001",
+    "name": "University Record Service",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3006"
+    },
+    {
+      "key": "applicantId",
+      "value": "applicant-001"
+    },
+    {
+      "key": "requestingPlayerId",
+      "value": "player-001"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health Check",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('reports ok', function () { pm.expect(pm.response.json().status).to.eql('ok'); });",
+              "pm.test('database is up', function () { pm.expect(pm.response.json().database).to.eql('up'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/health",
+          "host": ["{{baseUrl}}"],
+          "path": ["health"]
+        }
+      }
+    },
+    {
+      "name": "List University Records",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('returns an array', function () { pm.expect(json).to.be.an('array'); });",
+              "pm.test('contains seeded records', function () { pm.expect(json.length).to.be.at.least(2); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/records",
+          "host": ["{{baseUrl}}"],
+          "path": ["records"]
+        }
+      }
+    },
+    {
+      "name": "Get Record - Missing Requesting Player",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('status is 400', function () { pm.response.to.have.status(400); });",
+              "pm.test('requires requestingPlayerId', function () { pm.expect(json.error).to.eql('requestingPlayerId query parameter is required'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/records/{{applicantId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["records", "{{applicantId}}"]
+        }
+      }
+    },
+    {
+      "name": "Get Record",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('returns the requested applicant record', function () { pm.expect(json.applicant_id).to.eql(pm.collectionVariables.get('applicantId')); });",
+              "pm.test('contains university', function () { pm.expect(json.university).to.be.a('string').and.not.empty; });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/records/{{applicantId}}?requestingPlayerId={{requestingPlayerId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["records", "{{applicantId}}"],
+          "query": [
+            {
+              "key": "requestingPlayerId",
+              "value": "{{requestingPlayerId}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Get Record - Unknown Applicant",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 404', function () { pm.response.to.have.status(404); });",
+              "pm.test('reports record not found', function () { pm.expect(pm.response.json().error).to.eql('University record not found'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/records/does-not-exist?requestingPlayerId={{requestingPlayerId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["records", "does-not-exist"],
+          "query": [
+            {
+              "key": "requestingPlayerId",
+              "value": "{{requestingPlayerId}}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Create University Record",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('status is 201', function () { pm.response.to.have.status(201); });",
+              "pm.test('returns the submitted applicant', function () { pm.expect(json.applicant_id).to.eql('postman-applicant-001'); });",
+              "pm.test('returns the university', function () { pm.expect(json.university).to.eql('Technical University of Moldova'); });",
+              "pm.collectionVariables.set('createdApplicantId', 'postman-applicant-001');"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"applicantId\": \"postman-applicant-001\",\n  \"studentId\": \"UTM-POSTMAN-001\",\n  \"university\": \"Technical University of Moldova\",\n  \"faculty\": \"Faculty of Computers, Informatics and Microelectronics\",\n  \"program\": \"Software Engineering\",\n  \"studyYear\": 4,\n  \"enrollmentStatus\": \"active\",\n  \"averageGrade\": 9.50\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/records",
+          "host": ["{{baseUrl}}"],
+          "path": ["records"]
+        }
+      }
+    },
+    {
+      "name": "Create University Record - Missing Required Fields",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 400', function () { pm.response.to.have.status(400); });",
+              "pm.test('reports required fields', function () { pm.expect(pm.response.json().error).to.eql('applicantId and university are required'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"studentId\": \"UTM-POSTMAN-INVALID\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/records",
+          "host": ["{{baseUrl}}"],
+          "path": ["records"]
+        }
+      }
+    },
+    {
+      "name": "Update University Record",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('updates average grade', function () { pm.expect(Number(json.average_grade)).to.eql(9.75); });",
+              "pm.test('keeps applicant id', function () { pm.expect(json.applicant_id).to.eql('postman-applicant-001'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"averageGrade\": 9.75\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/records/postman-applicant-001",
+          "host": ["{{baseUrl}}"],
+          "path": ["records", "postman-applicant-001"]
+        }
+      }
+    },
+    {
+      "name": "Update University Record - Unknown Applicant",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 404', function () { pm.response.to.have.status(404); });",
+              "pm.test('reports record not found', function () { pm.expect(pm.response.json().error).to.eql('University record not found'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PUT",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"averageGrade\": 8.00\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/records/does-not-exist",
+          "host": ["{{baseUrl}}"],
+          "path": ["records", "does-not-exist"]
+        }
+      }
+    },
+    {
+      "name": "Delete University Record",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('confirms deletion', function () { pm.expect(json.message).to.eql('University record deleted'); });",
+              "pm.test('returns deleted record', function () { pm.expect(json.record.applicant_id).to.eql('postman-applicant-001'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "DELETE",
+        "url": {
+          "raw": "{{baseUrl}}/records/postman-applicant-001",
+          "host": ["{{baseUrl}}"],
+          "path": ["records", "postman-applicant-001"]
+        }
+      }
+    },
+    {
+      "name": "Delete University Record - Unknown Applicant",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 404', function () { pm.response.to.have.status(404); });",
+              "pm.test('reports record not found', function () { pm.expect(pm.response.json().error).to.eql('University record not found'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "DELETE",
+        "url": {
+          "raw": "{{baseUrl}}/records/does-not-exist",
+          "host": ["{{baseUrl}}"],
+          "path": ["records", "does-not-exist"]
+        }
+      }
+    }
+  ]
+}
