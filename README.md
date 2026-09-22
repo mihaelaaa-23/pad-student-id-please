@@ -76,7 +76,7 @@ It does **not** store applicant data itself (Applicant Service), university reco
 
 Owns the hidden university information moderators may need to verify an applicant: enrollment lists, Outlook group/email lists, current course catalog, academic year, and semester schedule. This information is deliberately fragmented across Junior Moderator players — one might see the enrollment list, another the message records — and the service must enforce that players can't access records they weren't assigned to see. As with Applicant/Credential Service, whichever service is contacted first for a new applicant initializes the record and propagates it onward.
 
-**Database:** PostgreSQL (`university_record_db`) — enrollment lists, course catalogs, and semester schedules are inherently relational (students ↔ courses ↔ semesters), and per-field access scoping is easier to enforce with relational constraints.
+**Database:** PostgreSQL (`university_records`) — enrollment lists, course catalogs, and semester schedules are inherently relational (students ↔ courses ↔ semesters), and per-field access scoping is easier to enforce with relational constraints.
 
 It does **not** own the applicant's public profile (Applicant Service) or credentials (Credential Service), and it does not enforce server rules itself (Server Rules Service).
 
@@ -211,35 +211,86 @@ Notes for callers (Applicant Service, Credential Service):
  
 #### Server Rules Service
 
-| Method | Path | Request | Response |
-|---|---|---|---|
-| GET | /rules/current | — | `{rules: [{id: string, description: string}]}` |
-| POST | /rules/evaluate | `{applicantId: string}` | `{passed: boolean, violatedRules: string[]}` |
+**Base URL:** `http://localhost:3005`
+
+| Method | Endpoint          | Request                       | Response                    |
+| ------ | ----------------- | ----------------------------- | --------------------------- |
+| `GET`  | `/rules/current`  | —                             | `{ rules: [...] }`          |
+| `POST` | `/rules/evaluate` | `{ applicantId, applicant? }` | `{ passed, violatedRules }` |
+
+**##### Evaluate rules**
+
+Example request:
+
+```json
+{
+  "applicantId": "applicant-001",
+  "applicant": {
+    "previousBan": false
+  }
+}
+```
+
+The Server Rules Service evaluates all enabled rules stored in MongoDB.
+
+When external-service mode is enabled, the service requests university information from the University Record Service using:
+
+```text
+GET /records/{applicantId}?requestingPlayerId=server-rules-service
+```
+
+The `applicant` object supplied to `/rules/evaluate` can provide fields directly used by rules. The service can also obtain additional university data from the University Record Service.
+
+The service supports a mock external-service mode through `MOCK_EXTERNAL_SERVICES=true`. This allows rule evaluation to be tested without requiring the University Record Service to be available.
+
+The current Lab 1 rule set includes:
+
+* `ONLY_FAF_STUDENTS` — applicant role must be `student_faf`
+* `ACTIVE_STATUS_REQUIRED` — applicant status must be `active`
+* `NO_PREVIOUS_BAN` — applicant must not have a previous ban
+
+The Server Rules Service does not make the final admission decision; it only reports whether the enabled rules passed and which rules were violated.
+
+
 
 #### University Record Service
 
-| Method | Path | Request | Response |
-|---|---|---|---|
-| GET | /records/{applicantId} | `{requestingPlayerId: string}` | `{applicantId: string, fields: object}` (scoped to player's access) |
+**Base URL:** `http://localhost:3006`
 
-Note from Applicant Service, which calls this endpoint: `GET /records/{applicantId}` carries `requestingPlayerId` in a request body. A request body on GET has no defined semantics in RFC 9110 and Node's `fetch` refuses to send one, so the client sends it as `?requestingPlayerId=string`. Moving it to a query parameter or a header in this table would remove the divergence.
- 
-#### Moderation Service
-| Method | Path | Request | Response |
-|---|---|---|---|
-| GET | /status | — | `{service: string, status: string, database: string, time: string}` |
-| POST | /moderation/decide | `{sessionId: string, applicantId: string, decision: string, decidedBy?: string}` | `201` + `{decisionId: string, sessionId: string, applicantId: string, decision: string, expectedDecision: string, correct: boolean, violatedRules: string[], penalty: int, decidedBy?: string, sources: object, createdAt: string, updatedAt?: string}` plus `announcedInChat: boolean` |
-| GET | /moderation/{decisionId} | — | the decision shape |
-| PATCH | /moderation/{decisionId} | `{decision: string, decidedBy?: string}` | the decision shape, plus `announcedInChat: boolean` |
-| DELETE | /moderation/{decisionId} | — | — (`204`, no body) |
-| GET | /sessions/{id}/decisions | `?applicantId=string&limit=int` (limit 1-200, default 50) | `{sessionId: string, count: int, decisions: [decision]}` |
-| GET | /sessions/{id}/summary | — | `{sessionId: string, decisions: int, correct: int, incorrect: int, accuracy: float, penalty: int, byDecision: object}` |
+| Method   | Endpoint                 | Request                              | Response                    |
+| -------- | ------------------------ | ------------------------------------ | --------------------------- |
+| `GET`    | `/records`               | —                                    | Array of university records |
+| `GET`    | `/records/{applicantId}` | `requestingPlayerId` query parameter | University record           |
+| `POST`   | `/records`               | University record JSON               | Created record              |
+| `PUT`    | `/records/{applicantId}` | Updated fields                       | Updated record              |
+| `DELETE` | `/records/{applicantId}` | —                                    | Deleted record              |
 
-Notes for callers:
+For a specific applicant, `requestingPlayerId` **must be supplied as a query parameter**:
 
-- `decision` is `accept`, `reject`, `flag` or `ban`.
-- A second `POST /moderation/decide` for the same applicant in the same session is `409`.
-- Errors come back as `{error: {code: string, message: string}}`.
+```text
+GET /records/applicant-001?requestingPlayerId=player-001
+```
+
+A request without `requestingPlayerId` returns HTTP `400`.
+
+Example response:
+
+```json
+{
+  "id": 1,
+  "applicant_id": "applicant-001",
+  "student_id": "UTM-2026-001",
+  "university": "Technical University of Moldova",
+  "faculty": "Faculty of Computers, Informatics and Microelectronics",
+  "program": "Software Engineering",
+  "study_year": 4,
+  "enrollment_status": "active",
+  "average_grade": 9.25
+}
+```
+
+The service uses PostgreSQL with a persistent Docker volume.
+
  
 #### Discord DMs Service
 | Method | Path | Request | Response |
@@ -438,8 +489,8 @@ Each service is pushed to DockerHub as a versioned, public image — no Dockerfi
 | Server Moderation Session Service | `mihaela5/session-service:0.3.0` | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` — if unset, falls back to mocked responses for those dependencies |
 | Applicant Service | `ciprik13/applicant-service:0.4.0` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `STORE_DRIVER` (`mongo` by default, `memory` runs without a database), `DECEPTIVE_RATE` (share of deceptive applicants, `0.35` by default), `UNIVERSITY_RECORD_SERVICE_URL` (if unset, University Record is mocked) and `HTTP_TIMEOUT_MS` (`2000` by default) |
 | Credential Service | `ciprik13/credential-service:0.4.0` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `CREDENTIAL_SIGNING_SECRET` (HMAC secret for credential authenticity — without it the service falls back to a development secret and credentials issued elsewhere are reported as `FORGED_SIGNATURE`); optionally `STORE_DRIVER` (`mongo` by default, `memory` runs without a database), `APPLICANT_SERVICE_URL` (if unset, Applicant Service is mocked) and `HTTP_TIMEOUT_MS` (`2000` by default) |
-| Server Rules Service | *pending* | |
-| University Record Service | *pending* | |
+| Server Rules Service | `ion190/server-rules-service:0.3.0` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `UNIVERSITY_RECORD_SERVICE_URL`, optionally `MOCK_EXTERNAL_SERVICES` |
+| University Record Service | `ion190/university-record-service:0.1.0` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` |
 | Moderation Service | `d3adeye/moderation-service:0.2.0` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` — if unset, falls back to mocked responses for those dependencies — and `DISCORD_DMS_SERVICE_URL` (verdicts are not posted to chat when unset) |
 | Discord DMs Service | `d3adeye/discord-dms-service:0.2.0` | `PORT`, `MONGODB_URI`, `MONGODB_DATABASE`; optionally `SESSION_SERVICE_URL` |
 
