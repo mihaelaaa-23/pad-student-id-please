@@ -173,38 +173,40 @@ services:
       timeout: 5s
       retries: 5
 
-  # ==================== University Record Service (Ion) — PLACEHOLDER ====================
-  university-record-service:
-    image: <ION_DOCKERHUB_USER>/university-record-service:<VERSION>
-    restart: unless-stopped
-    ports:
-      - "<PORT>:<PORT>"
-    environment:
-      PORT: <PORT>
-      DB_HOST: university-record-db
-      DB_PORT: 5432
-      DB_USER: ${UNIVERSITY_RECORD_DB_USER}
-      DB_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
-      DB_NAME: ${UNIVERSITY_RECORD_DB_NAME}
-    depends_on:
-      university-record-db:
-        condition: service_healthy
+    # ==================== University Record Service (Ion) ====================
+    university-record-service:
+      image: ion190/university-record-service:0.1.0
+      restart: unless-stopped
+      ports:
+        - "3006:3006"
+      environment:
+        PORT: 3006
+        DB_HOST: university-record-db
+        DB_PORT: 5432
+        DB_USER: ${UNIVERSITY_RECORD_DB_USER}
+        DB_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
+        DB_NAME: ${UNIVERSITY_RECORD_DB_NAME}
+        PLAYER_SERVICE_URL: http://player-service:3001
+        APPLICANT_SERVICE_URL: http://applicant-service:3003
+      depends_on:
+        university-record-db:
+          condition: service_healthy
 
-  university-record-db:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${UNIVERSITY_RECORD_DB_USER}
-      POSTGRES_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
-      POSTGRES_DB: ${UNIVERSITY_RECORD_DB_NAME}
-    volumes:
-      - university_record_db_data:/var/lib/postgresql/data
-      - ./db/university-record-service/init.sql:/docker-entrypoint-initdb.d/init.sql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${UNIVERSITY_RECORD_DB_USER} -d ${UNIVERSITY_RECORD_DB_NAME}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+    university-record-db:
+      image: postgres:16-alpine
+      restart: unless-stopped
+      environment:
+        POSTGRES_USER: ${UNIVERSITY_RECORD_DB_USER}
+        POSTGRES_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
+        POSTGRES_DB: ${UNIVERSITY_RECORD_DB_NAME}
+      volumes:
+        - university_record_db_data:/var/lib/postgresql/data
+        - ./db/university-record-service/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      healthcheck:
+        test: ["CMD-SHELL", "pg_isready -U ${UNIVERSITY_RECORD_DB_USER} -d ${UNIVERSITY_RECORD_DB_NAME}"]
+        interval: 5s
+        timeout: 5s
+        retries: 5
 
   # ==================== Moderation Service (Liviu) ====================
   moderation-service:
