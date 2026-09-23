@@ -103,7 +103,7 @@
             "exec": [
               "const json = pm.response.json();",
               "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
-              "pm.test('returns the requested applicant record', function () { pm.expect(json.applicant_id).to.eql(pm.collectionVariables.get('applicantId')); });",
+              "pm.test('returns the requested applicant record', function () { pm.expect(json.applicantId).to.eql(pm.collectionVariables.get('applicantId')); });",
               "pm.test('contains fields object', function () {pm.expect(json.fields).to.be.an('object');});",
               "pm.test('contains name', function () {pm.expect(json.fields.name).to.be.a('string').and.not.empty;});",
               "pm.test('contains studentId', function () {pm.expect(json.fields.studentId).to.be.a('string').and.not.empty;});",
@@ -172,7 +172,7 @@
             "exec": [
               "const json = pm.response.json();",
               "pm.test('status is 201', function () { pm.response.to.have.status(201); });",
-              "pm.test('returns the submitted applicant', function () { pm.expect(json.applicant_id).to.eql('postman-applicant-001'); });",
+              "pm.test('returns the submitted applicant', function () { pm.expect(json.applicantId).to.eql('postman-applicant-001'); });",
               "pm.test('returns the university', function () { pm.expect(json.university).to.eql('Technical University of Moldova'); });",
               "pm.collectionVariables.set('createdApplicantId', 'postman-applicant-001');"
             ]
@@ -244,7 +244,7 @@
               "const json = pm.response.json();",
               "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
               "pm.test('updates average grade', function () { pm.expect(Number(json.average_grade)).to.eql(9.75); });",
-              "pm.test('keeps applicant id', function () { pm.expect(json.applicant_id).to.eql('postman-applicant-001'); });"
+              "pm.test('keeps applicant id', function () { pm.expect(json.applicantId).to.eql('postman-applicant-001'); });"
             ]
           }
         }
@@ -314,7 +314,7 @@
               "const json = pm.response.json();",
               "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
               "pm.test('confirms deletion', function () { pm.expect(json.message).to.eql('University record deleted'); });",
-              "pm.test('returns deleted record', function () { pm.expect(json.record.applicant_id).to.eql('postman-applicant-001'); });"
+              "pm.test('returns deleted record', function () { pm.expect(json.record.applicantId).to.eql('postman-applicant-001'); });"
             ]
           }
         }
