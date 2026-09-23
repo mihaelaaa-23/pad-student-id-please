@@ -25,6 +25,9 @@
 [submodule "services/server-rules-service"]
 	path = services/server-rules-service
 	url = https://github.com/ion190/server-rules-service.git
+	branch = dev
 [submodule "services/university-record-service"]
 	path = services/university-record-service
 	url = https://github.com/ion190/university-record-service.git
+	branch = dev
+

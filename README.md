@@ -78,7 +78,7 @@ It does **not** store applicant data itself (Applicant Service), university reco
 
 Owns the hidden university information moderators may need to verify an applicant: enrollment lists, Outlook group/email lists, current course catalog, academic year, and semester schedule. This information is deliberately fragmented across Junior Moderator players — one might see the enrollment list, another the message records — and the service must enforce that players can't access records they weren't assigned to see. As with Applicant/Credential Service, whichever service is contacted first for a new applicant initializes the record and propagates it onward.
 
-**Database:** PostgreSQL (`university_record_db`) — enrollment lists, course catalogs, and semester schedules are inherently relational (students ↔ courses ↔ semesters), and per-field access scoping is easier to enforce with relational constraints.
+**Database:** PostgreSQL (`university_records`) — enrollment lists, course catalogs, and semester schedules are inherently relational (students ↔ courses ↔ semesters), and per-field access scoping is easier to enforce with relational constraints.
 
 It does **not** own the applicant's public profile (Applicant Service) or credentials (Credential Service), and it does not enforce server rules itself (Server Rules Service).
 
@@ -228,16 +228,83 @@ Notes for callers (Applicant Service, Credential Service):
  
 #### Server Rules Service
 
-| Method | Path | Request | Response |
-|---|---|---|---|
-| GET | /rules/current | — | `{rules: [{id: string, description: string}]}` |
-| POST | /rules/evaluate | `{applicantId: string}` | `{passed: boolean, violatedRules: string[]}` |
+**Base URL:** `http://localhost:3005`
+
+| Method | Endpoint          | Request                       | Response                    |
+| ------ | ----------------- | ----------------------------- | --------------------------- |
+| `GET`  | `/rules/current`  | —                             | `{ rules: [...] }`          |
+| `POST` | `/rules/evaluate` | `{ applicantId, applicant? }` | `{ passed, violatedRules }` |
+
+**##### Evaluate rules**
+
+Example request:
+
+```json
+{
+  "applicantId": "applicant-001",
+  "applicant": {
+    "previousBan": false
+  }
+}
+```
+
+The Server Rules Service evaluates all enabled rules stored in MongoDB.
+
+The service requests university information from the University Record Service using:
+
+```text
+GET /records/{applicantId}?requestingPlayerId=server-rules-service
+```
+
+The University Record Service is configured through `UNIVERSITY_RECORD_SERVICE_URL`. If the URL is not configured, or the University Record Service is unreachable, Server Rules Service automatically falls back to its built-in mock university record data. A non-success HTTP response from the University Record Service is treated as an error.
+
+The current Lab 1 rule set includes:
+
+* `ONLY_FAF_STUDENTS` — applicant role must be `student_faf`
+* `ACTIVE_STATUS_REQUIRED` — applicant status must be `active`
+* `NO_PREVIOUS_BAN` — applicant must not have a previous ban
+
+The Server Rules Service does not make the final admission decision; it only reports whether the enabled rules passed and which rules were violated.
+
+
 
 #### University Record Service
 
-| Method | Path | Request | Response |
-|---|---|---|---|
-| GET | /records/{applicantId} | `?requestingPlayerId=string` (query parameter) | `{applicantId: string, fields: object}` (scoped to player's access) |
+**Base URL:** `http://localhost:3006`
+
+| Method   | Endpoint                 | Request                              | Response                    |
+| -------- | ------------------------ | ------------------------------------ | --------------------------- |
+| `GET`    | `/records`               | —                                    | Array of university records |
+| `GET`    | `/records/{applicantId}` | `?requestingPlayerId=string` (query parameter) | `{applicantId: string, fields: object}` (scoped to player's access) |
+| `POST`   | `/records`               | University record JSON               | Created record              |
+| `PUT`    | `/records/{applicantId}` | Updated fields                       | Updated record              |
+| `DELETE` | `/records/{applicantId}` | —                                    | Deleted record              |
+
+For a specific applicant, `requestingPlayerId` **must be supplied as a query parameter**:
+
+```text
+GET /records/applicant-001?requestingPlayerId=player-001
+```
+
+A request without `requestingPlayerId` returns HTTP `422` with `{error: {code: "VALIDATION_FAILED", message: string}}`.
+
+Example response:
+
+```json
+{
+  "id": 1,
+  "applicant_id": "applicant-001",
+  "student_id": "UTM-2026-001",
+  "university": "Technical University of Moldova",
+  "faculty": "Faculty of Computers, Informatics and Microelectronics",
+  "program": "Software Engineering",
+  "study_year": 4,
+  "enrollment_status": "active",
+  "average_grade": 9.25
+}
+```
+
+The service uses PostgreSQL with a persistent Docker volume.
 
 #### Moderation Service
 | Method | Path | Request | Response |
@@ -455,8 +522,8 @@ Each service is pushed to Docker Hub as a versioned, public image — no Dockerf
 | Server Moderation Session Service | [`mihaela5/session-service:0.5.0`](https://hub.docker.com/r/mihaela5/session-service) | 3002 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `PLAYER_SERVICE_URL` (shift XP is sent there on `end`), `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` — if unset, falls back to mocked responses for those dependencies |
 | Applicant Service | [`ciprik13/applicant-service:0.4.0`](https://hub.docker.com/r/ciprik13/applicant-service) | 3003 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `STORE_DRIVER` (`mongo` by default, `memory` runs without a database), `DECEPTIVE_RATE` (share of deceptive applicants, `0.35` by default), `UNIVERSITY_RECORD_SERVICE_URL` (if unset, University Record is mocked) and `HTTP_TIMEOUT_MS` (`2000` by default) |
 | Credential Service | [`ciprik13/credential-service:0.4.0`](https://hub.docker.com/r/ciprik13/credential-service) | 3004 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `CREDENTIAL_SIGNING_SECRET` (HMAC secret for credential authenticity — without it the service falls back to a development secret and credentials issued elsewhere are reported as `FORGED_SIGNATURE`); optionally `STORE_DRIVER` (`mongo` by default, `memory` runs without a database), `APPLICANT_SERVICE_URL` (if unset, Applicant Service is mocked) and `HTTP_TIMEOUT_MS` (`2000` by default) |
-| Server Rules Service | [`ion190/server-rules-service:0.3.0`](https://hub.docker.com/r/ion190/server-rules-service) | 3005 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `UNIVERSITY_RECORD_SERVICE_URL` and `MOCK_EXTERNAL_SERVICES` (`"true"` answers external lookups from mocks) |
-| University Record Service | *not yet published* | 3006 | |
+| Server Rules Service | [`ion190/server-rules-service:0.3.0`](https://hub.docker.com/r/ion190/server-rules-service) | 3005 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `UNIVERSITY_RECORD_SERVICE_URL` — if unset or if University Record Service is unreachable, Server Rules Service falls back to its built-in mock university records |
+| University Record Service | [`ion190/university-record-service:0.1.0`](https://hub.docker.com/r/ion190/university-record-service) | 3006 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` |
 | Moderation Service | [`d3adeye/moderation-service:0.3.0`](https://hub.docker.com/r/d3adeye/moderation-service) | 3007 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` — if unset, falls back to mocked responses for those dependencies — and `DISCORD_DMS_SERVICE_URL` (verdicts are not posted to chat when unset) |
 | Discord DMs Service | [`d3adeye/discord-dms-service:0.3.0`](https://hub.docker.com/r/d3adeye/discord-dms-service) | 3008 | `PORT`, `MONGODB_URI`, `MONGODB_DATABASE`; optionally `SESSION_SERVICE_URL` — when set, a session is checked against Server Moderation Session Service before its channels or roster are created; when unset, the roster is managed through this service's own `/sessions/{id}/members` endpoints |
 
@@ -480,7 +547,6 @@ See `docker-compose.yml` at the repo root for the full setup, including each ser
 
 Each database runs `db/<service>/init.*` on first startup and persists its data in a named Docker volume, so data survives `docker compose down`. Use `docker compose down -v` to wipe it.
 
-> **Known gap:** until University Record Service is published, its block in `docker-compose.yml` still contains placeholders, and Compose refuses to load the file. To run the stack in the meantime, comment out the `university-record-service` block locally (don't commit that change). Session Service and Server Rules Service fall back to their University Record mocks.
 
 ## Project Board
 

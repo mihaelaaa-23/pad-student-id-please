@@ -156,7 +156,6 @@ services:
       DB_PASSWORD: ${RULES_DB_PASSWORD}
       DB_NAME: ${RULES_DB_NAME}
       UNIVERSITY_RECORD_SERVICE_URL: http://university-record-service:3006
-      MOCK_EXTERNAL_SERVICES: "true"
     depends_on:
       rules-db:
         condition: service_healthy
@@ -177,14 +176,14 @@ services:
       timeout: 5s
       retries: 5
 
-  # ==================== University Record Service (Ion) — PLACEHOLDER ====================
+  # ==================== University Record Service (Ion) ====================
   university-record-service:
-    image: <ION_DOCKERHUB_USER>/university-record-service:<VERSION>
+    image: ion190/university-record-service:0.1.0
     restart: unless-stopped
     ports:
-      - "<PORT>:<PORT>"
+      - "3006:3006"
     environment:
-      PORT: <PORT>
+      PORT: 3006
       DB_HOST: university-record-db
       DB_PORT: 5432
       DB_USER: ${UNIVERSITY_RECORD_DB_USER}
@@ -203,7 +202,7 @@ services:
       POSTGRES_DB: ${UNIVERSITY_RECORD_DB_NAME}
     volumes:
       - university_record_db_data:/var/lib/postgresql/data
-      - ./db/university-record-service/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./db/university-record-service/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${UNIVERSITY_RECORD_DB_USER} -d ${UNIVERSITY_RECORD_DB_NAME}"]
       interval: 5s
