@@ -318,6 +318,98 @@
       }
     },
     {
+      "name": "Delete Session",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('session was deleted', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(json.sessionId).to.eql(pm.collectionVariables.get('sessionId'));",
+              "    pm.expect(json.deleted).to.eql(true);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "DELETE",
+        "url": {
+          "raw": "{{baseUrl}}/sessions/{{sessionId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "sessions",
+            "{{sessionId}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Get Deleted Session",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('deleted session is a 404', function () {",
+              "    pm.response.to.have.status(404);",
+              "    pm.expect(pm.response.json().error.code).to.eql('NOT_FOUND');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/sessions/{{sessionId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "sessions",
+            "{{sessionId}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Delete Session Again",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('deleting a missing session is a 404', function () {",
+              "    pm.response.to.have.status(404);",
+              "    pm.expect(pm.response.json().error.code).to.eql('NOT_FOUND');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "DELETE",
+        "url": {
+          "raw": "{{baseUrl}}/sessions/{{sessionId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "sessions",
+            "{{sessionId}}"
+          ]
+        }
+      }
+    },
+    {
       "name": "Get Nonexistent Session",
       "event": [
         {
