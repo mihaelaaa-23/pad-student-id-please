@@ -17,9 +17,11 @@
 [submodule "services/moderation-service"]
 	path = services/moderation-service
 	url = https://github.com/D3adeYe69/Moderation-Service
+	branch = dev
 [submodule "services/discord-dms-service"]
 	path = services/discord-dms-service
 	url = https://github.com/D3adeYe69/Discord-DMs-Service
+	branch = dev
 [submodule "services/server-rules-service"]
 	path = services/server-rules-service
 	url = https://github.com/ion190/server-rules-service.git

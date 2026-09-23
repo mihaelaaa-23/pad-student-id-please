@@ -12,6 +12,8 @@ Team 18
 - [Communication Contract](#communication-contract)
 - [Development Guidelines](#development-guidelines)
 - [Microservice Repositories](#microservice-repositories)
+- [Docker Images](#docker-images)
+- [Running the Stack](#running-the-stack)
 - [Project Board](#project-board)
 
 ## Overview
@@ -104,7 +106,7 @@ Services sit inside a single **Service Layer** boundary, with the Client enterin
 **Service Relationships**
 
 Server Moderation Session Service acts as the central coordinator during an active shift. It queries Applicant Service for the current applicant, Credential Service to check submitted documents, Server Rules Service to evaluate the applicant against current access rules, and University Record Service to pull any hidden records needed for verification. Once a shift ends, it publishes the result to Player Service so XP and levels can be updated.
-This is exposed concretely through `POST /sessions/{id}/process-applicant`, which currently calls mocked versions of these four services and falls back to real HTTP calls once they're deployed and reachable.
+This is exposed concretely through `POST /sessions/{id}/process-applicant`, which calls the real services when their URLs are configured (as in the shared `docker-compose.yml`) and falls back to contract-shaped mocks when a service is unset or unreachable. University Record Service is currently always mocked, since it isn't published yet.
 
 Moderation Service independently gathers the same four services — Applicant, Credential, Server Rules, and University Record — to determine whether the Moderator's decision (Accept, Reject, Flag, or Ban) was correct under the current rules. It does not talk to Player Service or Session Service directly; it only consumes applicant-side data to produce a verdict.
 
@@ -167,6 +169,7 @@ This has a few direct consequences for how the system behaves:
 | GET | /players/{id} | — | `{playerId: string, username: string, level: int, xp: int, friends: string[]}` |
 | PATCH | /players/{id}/xp | `{xpGained: int, reason: string}` | `{playerId: string, xp: int, level: int}` |
 | DELETE | /players/{id} | — | `{playerId: string, deleted: boolean}` |
+| GET | /status | — | `{status: string, database: string}` — `503` with `status: "degraded"` and `database: "down"` when PostgreSQL is unreachable |
  
 #### Server Moderation Session Service
 | Method | Path | Request | Response |
@@ -176,6 +179,13 @@ This has a few direct consequences for how the system behaves:
 | GET | /sessions/{id} | — | `{sessionId: string, currentApplicantId: string, processedCount: int, score: int, status: string}` |
 | POST | /sessions/{id}/end | — | `{sessionId: string, result: string, score: int}` |
 | POST | /sessions/{id}/process-applicant | — | `{sessionId: string, processedCount: int, currentApplicantId: string, applicant: object, credentialCheck: object, rulesCheck: object, universityRecords: object}` |
+| GET | /status | — | `{status: string, database: string}` — `503` with `status: "degraded"` and `database: "down"` when PostgreSQL is unreachable |
+
+Notes for callers:
+
+- `POST /sessions/{id}/end` awards XP to every participant through Player Service's `PATCH /players/{id}/xp` (currently 10 XP per processed applicant, a placeholder until Moderation Service scoring is integrated). Ending is one-time: a second call returns `409 CONFLICT`, so XP is never awarded twice.
+- A duplicate `POST /sessions/{id}/join` for the same player returns `409 CONFLICT`.
+- Errors come back as `{error: {code: string, message: string}}`.
  
 #### Applicant Service
 | Method | Path | Request | Response |
@@ -291,6 +301,23 @@ Example response:
 
 The service uses PostgreSQL with a persistent Docker volume.
 
+#### Moderation Service
+| Method | Path | Request | Response |
+|---|---|---|---|
+| GET | /status | — | `{service: string, status: string, database: string, time: string}` |
+| POST | /moderation/decide | `{sessionId: string, applicantId: string, decision: string, decidedBy?: string}` | `201` + `{decisionId: string, sessionId: string, applicantId: string, decision: string, expectedDecision: string, correct: boolean, violatedRules: string[], penalty: int, decidedBy?: string, sources: object, createdAt: string, updatedAt?: string}` plus `announcedInChat: boolean` |
+| GET | /moderation/{decisionId} | — | the decision shape |
+| PATCH | /moderation/{decisionId} | `{decision: string, decidedBy?: string}` | the decision shape, plus `announcedInChat: boolean` |
+| DELETE | /moderation/{decisionId} | — | — (`204`, no body) |
+| GET | /sessions/{id}/decisions | `?applicantId=string&limit=int` (limit 1-200, default 50) | `{sessionId: string, count: int, decisions: [decision]}` |
+| GET | /sessions/{id}/summary | — | `{sessionId: string, decisions: int, correct: int, incorrect: int, accuracy: float, penalty: int, byDecision: object}` |
+
+Notes for callers:
+
+- `decision` is `accept`, `reject`, `flag` or `ban`.
+- A second `POST /moderation/decide` for the same applicant in the same session is `409`.
+- `violatedRules` carries the rule ids returned by Server Rules Service, the credential issue codes prefixed with `credential: `, and record findings prefixed with `record: `.
+- Errors come back as `{error: {code: string, message: string}}`.
  
 #### Discord DMs Service
 | Method | Path | Request | Response |
@@ -324,6 +351,7 @@ Notes for callers:
 - Renaming a channel keeps its id, its messages and its access grants. Deleting a channel deletes its messages.
 - `POST /sessions/{id}/members` replaces the player's assignment when called again.
 - Messages come back oldest first. A message posted over HTTP is also sent to every WebSocket listener on the channel, and every message is stored before it is sent.
+- `POST /sessions/{id}/bootstrap` and `POST /sessions/{id}/members` answer `404` when `SESSION_SERVICE_URL` is set and Server Moderation Session Service does not know that session. With it unset the check is skipped, and a Session Service that is unreachable does not block the request.
 - Errors come back as `{error: {code: string, message: string}}`.
 
 ### Shared Enumerations and Field Formats
@@ -481,27 +509,40 @@ We use the [Conventional Commits](https://www.conventionalcommits.org/) specific
 
 ## Docker Images
 
-Each service is pushed to DockerHub as a versioned, public image — no Dockerfiles are needed to run the system, only the images below.
+Each service is pushed to Docker Hub as a versioned, public image — no Dockerfiles are needed to run the system, only the images below. The shared `docker-compose.yml` already sets every variable listed here; they only matter when running an image on its own.
 
-| Service | DockerHub Image | Run Requirements |
-|---|---|---|
-| Player Service | `mihaela5/player-service:0.3.0` | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` |
-| Server Moderation Session Service | `mihaela5/session-service:0.3.0` | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` — if unset, falls back to mocked responses for those dependencies |
-| Applicant Service | `ciprik13/applicant-service:0.4.0` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `STORE_DRIVER` (`mongo` by default, `memory` runs without a database), `DECEPTIVE_RATE` (share of deceptive applicants, `0.35` by default), `UNIVERSITY_RECORD_SERVICE_URL` (if unset, University Record is mocked) and `HTTP_TIMEOUT_MS` (`2000` by default) |
-| Credential Service | `ciprik13/credential-service:0.4.0` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `CREDENTIAL_SIGNING_SECRET` (HMAC secret for credential authenticity — without it the service falls back to a development secret and credentials issued elsewhere are reported as `FORGED_SIGNATURE`); optionally `STORE_DRIVER` (`mongo` by default, `memory` runs without a database), `APPLICANT_SERVICE_URL` (if unset, Applicant Service is mocked) and `HTTP_TIMEOUT_MS` (`2000` by default) |
-| Server Rules Service | `ion190/server-rules-service:0.3.0` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `UNIVERSITY_RECORD_SERVICE_URL`, optionally `MOCK_EXTERNAL_SERVICES` |
-| University Record Service | `ion190/university-record-service:0.1.0` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` |
-| Moderation Service | `d3adeye/moderation-service:0.2.0` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` — if unset, falls back to mocked responses for those dependencies — and `DISCORD_DMS_SERVICE_URL` (verdicts are not posted to chat when unset) |
-| Discord DMs Service | `d3adeye/discord-dms-service:0.2.0` | `PORT`, `MONGODB_URI`, `MONGODB_DATABASE`; optionally `SESSION_SERVICE_URL` |
+| Service | Docker Hub Image | Port | Run Requirements |
+|---|---|---|---|
+| Player Service | [`mihaela5/player-service:0.4.0`](https://hub.docker.com/r/mihaela5/player-service) | 3001 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` |
+| Server Moderation Session Service | [`mihaela5/session-service:0.4.0`](https://hub.docker.com/r/mihaela5/session-service) | 3002 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `PLAYER_SERVICE_URL` (shift XP is sent there on `end`), `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` — if unset, falls back to mocked responses for those dependencies |
+| Applicant Service | [`ciprik13/applicant-service:0.4.0`](https://hub.docker.com/r/ciprik13/applicant-service) | 3003 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `STORE_DRIVER` (`mongo` by default, `memory` runs without a database), `DECEPTIVE_RATE` (share of deceptive applicants, `0.35` by default), `UNIVERSITY_RECORD_SERVICE_URL` (if unset, University Record is mocked) and `HTTP_TIMEOUT_MS` (`2000` by default) |
+| Credential Service | [`ciprik13/credential-service:0.4.0`](https://hub.docker.com/r/ciprik13/credential-service) | 3004 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `CREDENTIAL_SIGNING_SECRET` (HMAC secret for credential authenticity — without it the service falls back to a development secret and credentials issued elsewhere are reported as `FORGED_SIGNATURE`); optionally `STORE_DRIVER` (`mongo` by default, `memory` runs without a database), `APPLICANT_SERVICE_URL` (if unset, Applicant Service is mocked) and `HTTP_TIMEOUT_MS` (`2000` by default) |
+| Server Rules Service | [`ion190/server-rules-service:0.3.0`](https://hub.docker.com/r/ion190/server-rules-service) | 3005 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `UNIVERSITY_RECORD_SERVICE_URL` and `MOCK_EXTERNAL_SERVICES` (`"true"` answers external lookups from mocks) |
+| University Record Service | [`ion190/university-record-service:0.1.0`](https://hub.docker.com/r/ion190/university-record-service) | 3006 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` |
+| Moderation Service | [`d3adeye/moderation-service:0.3.0`](https://hub.docker.com/r/d3adeye/moderation-service) | 3007 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` — if unset, falls back to mocked responses for those dependencies — and `DISCORD_DMS_SERVICE_URL` (verdicts are not posted to chat when unset) |
+| Discord DMs Service | [`d3adeye/discord-dms-service:0.3.0`](https://hub.docker.com/r/d3adeye/discord-dms-service) | 3008 | `PORT`, `MONGODB_URI`, `MONGODB_DATABASE`; optionally `SESSION_SERVICE_URL` — when set, a session is checked against Server Moderation Session Service before its channels or roster are created; when unset, the roster is managed through this service's own `/sessions/{id}/members` endpoints |
 
 Pull an image directly, e.g.:
 ```bash
-docker pull mihaela5/player-service:0.2.0
+docker pull mihaela5/player-service:0.4.0
 ```
 
 **Note:** these are the variables the container itself reads. If you're running the full system via the shared `docker-compose.yml` at the repo root, its `.env` file uses service-prefixed names instead (e.g. `PLAYER_DB_USER`) to avoid collisions across all 8 services sharing one file — see that file for the exact mapping.
 
 See `docker-compose.yml` at the repo root for the full setup, including each service's database.
+
+## Running the Stack
+
+**Requirements:** Docker 24+ with Docker Compose v2. No local Node.js or Go is needed to run the services. Node.js 18+ is only needed for running the Postman collections with newman (or import them into the Postman app instead).
+
+1. Create your environment file with `cp .env.example .env`, then replace every `replace-with-…` placeholder with a real value. `.env.example` shows how to generate strong values, and `.env` is gitignored and must never be committed.
+2. Start everything with `docker compose up -d`.
+3. Check that each service is healthy with `curl http://localhost:<port>/status`.
+4. Test a service with its Postman collection from `postman/`, e.g. `npx newman run postman/session-service.postman_collection.json`.
+
+Each database runs `db/<service>/init.*` on first startup and persists its data in a named Docker volume, so data survives `docker compose down`. Use `docker compose down -v` to wipe it.
+
+> **Known gap:** until University Record Service is published, its block in `docker-compose.yml` still contains placeholders, and Compose refuses to load the file. To run the stack in the meantime, comment out the `university-record-service` block locally (don't commit that change). Session Service and Server Rules Service fall back to their University Record mocks.
 
 ## Project Board
 

@@ -1,7 +1,7 @@
 services:
   # ==================== Player Service (Mihaela) ====================
   player-service:
-    image: mihaela5/player-service:0.3.0
+    image: mihaela5/player-service:0.4.0
     restart: unless-stopped
     ports:
       - "3001:3001"
@@ -34,7 +34,7 @@ services:
 
   # ==================== Server Moderation Session Service (Mihaela) ====================
   session-service:
-    image: mihaela5/session-service:0.3.0
+    image: mihaela5/session-service:0.4.0
     restart: unless-stopped
     ports:
       - "3002:3002"
@@ -45,6 +45,10 @@ services:
       DB_USER: ${SESSION_DB_USER}
       DB_PASSWORD: ${SESSION_DB_PASSWORD}
       DB_NAME: ${SESSION_DB_NAME}
+      PLAYER_SERVICE_URL: http://player-service:3001
+      APPLICANT_SERVICE_URL: http://applicant-service:3003
+      CREDENTIAL_SERVICE_URL: http://credential-service:3004
+      RULES_SERVICE_URL: http://server-rules-service:3005
     depends_on:
       session-db:
         condition: service_healthy
@@ -207,7 +211,7 @@ services:
 
   # ==================== Moderation Service (Liviu) ====================
   moderation-service:
-    image: d3adeye/moderation-service:0.2.0
+    image: d3adeye/moderation-service:0.3.0
     restart: unless-stopped
     ports:
       - "3007:3007"
@@ -241,7 +245,7 @@ services:
 
   # ==================== Discord DMs Service (Liviu) ====================
   discord-dms-service:
-    image: d3adeye/discord-dms-service:0.2.0
+    image: d3adeye/discord-dms-service:0.3.0
     restart: unless-stopped
     ports:
       - "3008:3008"
@@ -249,6 +253,7 @@ services:
       PORT: 3008
       MONGODB_URI: mongodb://${DISCORD_DMS_DB_USER}:${DISCORD_DMS_DB_PASSWORD}@discord-dms-db:27017/?authSource=admin
       MONGODB_DATABASE: ${DISCORD_DMS_DB_NAME}
+      SESSION_SERVICE_URL: http://session-service:3002
     depends_on:
       discord-dms-db:
         condition: service_healthy
