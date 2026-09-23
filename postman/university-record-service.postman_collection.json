@@ -77,8 +77,9 @@
             "type": "text/javascript",
             "exec": [
               "const json = pm.response.json();",
-              "pm.test('status is 400', function () { pm.response.to.have.status(400); });",
-              "pm.test('requires requestingPlayerId', function () { pm.expect(json.error).to.eql('requestingPlayerId query parameter is required'); });"
+              "pm.test('status is 422', function () { pm.response.to.have.status(422); });",
+              "pm.test('returns validation error', function () { pm.expect(json.error.code).to.eql('VALIDATION_FAILED'); });",
+              "pm.test('requires requestingPlayerId', function () { pm.expect(json.error.message).to.eql('requestingPlayerId query parameter is required');});"
             ]
           }
         }
@@ -103,7 +104,14 @@
               "const json = pm.response.json();",
               "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
               "pm.test('returns the requested applicant record', function () { pm.expect(json.applicant_id).to.eql(pm.collectionVariables.get('applicantId')); });",
-              "pm.test('contains university', function () { pm.expect(json.university).to.be.a('string').and.not.empty; });"
+              "pm.test('contains fields object', function () {pm.expect(json.fields).to.be.an('object');});",
+              "pm.test('contains name', function () {pm.expect(json.fields.name).to.be.a('string').and.not.empty;});",
+              "pm.test('contains studentId', function () {pm.expect(json.fields.studentId).to.be.a('string').and.not.empty;});",
+              "pm.test('contains university', function () {pm.expect(json.fields.university).to.be.a('string').and.not.empty;});",
+              "pm.test('contains faculty', function () { pm.expect(json.fields.faculty).to.be.a('string').and.not.empty;});",
+              "pm.test('contains role', function () { pm.expect(json.fields.role).to.be.a('string').and.not.empty;});",
+              "pm.test('contains status', function () { pm.expect(json.fields.status).to.be.a('string').and.not.empty;});",
+              "pm.test('contains studyYear', function () { pm.expect(json.fields.studyYear).to.be.a('number');});"
             ]
           }
         }
@@ -131,8 +139,10 @@
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.test('status is 404', function () { pm.response.to.have.status(404); });",
-              "pm.test('reports record not found', function () { pm.expect(pm.response.json().error).to.eql('University record not found'); });"
+              "const json = pm.response.json();",
+              "pm.test('status is 404', function () {pm.response.to.have.status(404);});",
+              "pm.test('returns not found error', function () { pm.expect(json.error.code).to.eql('NOT_FOUND');});",
+              "pm.test('reports record not found', function () {pm.expect(json.error.message).to.eql('University record not found');});"
             ]
           }
         }
@@ -179,7 +189,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"applicantId\": \"postman-applicant-001\",\n  \"studentId\": \"UTM-POSTMAN-001\",\n  \"university\": \"Technical University of Moldova\",\n  \"faculty\": \"Faculty of Computers, Informatics and Microelectronics\",\n  \"program\": \"Software Engineering\",\n  \"studyYear\": 4,\n  \"enrollmentStatus\": \"active\",\n  \"averageGrade\": 9.50\n}"
+          "raw": "{\n  \"applicantId\": \"postman-applicant-001\",\n  \"studentId\": \"UTM-POSTMAN-001\",\n  \"name\": \"Postman Applicant\",\n  \"role\": \"student_faf\",\n  \"university\": \"Technical University of Moldova\",\n  \"faculty\": \"Faculty of Computers, Informatics and Microelectronics\",\n  \"program\": \"Software Engineering\",\n  \"studyYear\": 4,\n  \"status\": \"active\",\n  \"averageGrade\": 9.50\n}"
         },
         "url": {
           "raw": "{{baseUrl}}/records",
@@ -196,8 +206,10 @@
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.test('status is 400', function () { pm.response.to.have.status(400); });",
-              "pm.test('reports required fields', function () { pm.expect(pm.response.json().error).to.eql('applicantId and university are required'); });"
+              "const json = pm.response.json();",
+              "pm.test('status is 422', function () {pm.response.to.have.status(422);});",
+              "pm.test('returns validation error', function () {pm.expect(json.error.code).to.eql('VALIDATION_FAILED');});",
+              "pm.test('reports required fields', function () {pm.expect(json.error.message).to.eql('applicantId, name, studentId, university, role and status are required');});"
             ]
           }
         }
@@ -264,8 +276,10 @@
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.test('status is 404', function () { pm.response.to.have.status(404); });",
-              "pm.test('reports record not found', function () { pm.expect(pm.response.json().error).to.eql('University record not found'); });"
+              "const json = pm.response.json();",
+              "pm.test('status is 404', function () {pm.response.to.have.status(404);});",
+              "pm.test('returns not found error', function () {pm.expect(json.error.code).to.eql('NOT_FOUND');});",
+              "pm.test('reports record not found', function () {pm.expect(json.error.message).to.eql('University record not found');});"
             ]
           }
         }
@@ -322,8 +336,10 @@
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.test('status is 404', function () { pm.response.to.have.status(404); });",
-              "pm.test('reports record not found', function () { pm.expect(pm.response.json().error).to.eql('University record not found'); });"
+              "const json = pm.response.json();",
+              "pm.test('status is 404', function () {pm.response.to.have.status(404);});",
+              "pm.test('returns not found error', function () {pm.expect(json.error.code).to.eql('NOT_FOUND');});",
+              "pm.test('reports record not found', function () {pm.expect(json.error.message).to.eql('University record not found');});"
             ]
           }
         }
