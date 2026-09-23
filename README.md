@@ -170,6 +170,12 @@ This has a few direct consequences for how the system behaves:
 | PATCH | /players/{id}/xp | `{xpGained: int, reason: string}` | `{playerId: string, xp: int, level: int}` |
 | DELETE | /players/{id} | — | `{playerId: string, deleted: boolean}` |
 | GET | /status | — | `{status: string, database: string}` — `503` with `status: "degraded"` and `database: "down"` when PostgreSQL is unreachable |
+
+
+>Notes for callers:
+>- `POST /players/login` returns `401 UNAUTHORIZED` for an unknown username or wrong password.
+>- A duplicate username on `POST /players/register` returns `409 CONFLICT`; unknown IDs return `404 NOT_FOUND`.
+>- Errors come back as `{error: {code: string, message: string}}`.
  
 #### Server Moderation Session Service
 | Method | Path | Request | Response |
@@ -180,6 +186,7 @@ This has a few direct consequences for how the system behaves:
 | POST | /sessions/{id}/end | — | `{sessionId: string, result: string, score: int}` |
 | POST | /sessions/{id}/process-applicant | — | `{sessionId: string, processedCount: int, currentApplicantId: string, applicant: object, credentialCheck: object, rulesCheck: object, universityRecords: object}` |
 | GET | /status | — | `{status: string, database: string}` — `503` with `status: "degraded"` and `database: "down"` when PostgreSQL is unreachable |
+| DELETE | /sessions/{id} | — | `{sessionId: string, deleted: boolean}` — `404 NOT_FOUND` if unknown |
 
 Notes for callers:
 
@@ -268,7 +275,7 @@ The Server Rules Service does not make the final admission decision; it only rep
 | Method   | Endpoint                 | Request                              | Response                    |
 | -------- | ------------------------ | ------------------------------------ | --------------------------- |
 | `GET`    | `/records`               | —                                    | Array of university records |
-| `GET`    | `/records/{applicantId}` | `requestingPlayerId` query parameter | University record           |
+| `GET`    | `/records/{applicantId}` | `?requestingPlayerId=string` (query parameter) | `{applicantId: string, fields: object}` (scoped to player's access) |
 | `POST`   | `/records`               | University record JSON               | Created record              |
 | `PUT`    | `/records/{applicantId}` | Updated fields                       | Updated record              |
 | `DELETE` | `/records/{applicantId}` | —                                    | Deleted record              |
@@ -512,7 +519,7 @@ Each service is pushed to Docker Hub as a versioned, public image — no Dockerf
 | Service | Docker Hub Image | Port | Run Requirements |
 |---|---|---|---|
 | Player Service | [`mihaela5/player-service:0.4.0`](https://hub.docker.com/r/mihaela5/player-service) | 3001 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` |
-| Server Moderation Session Service | [`mihaela5/session-service:0.4.0`](https://hub.docker.com/r/mihaela5/session-service) | 3002 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `PLAYER_SERVICE_URL` (shift XP is sent there on `end`), `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` — if unset, falls back to mocked responses for those dependencies |
+| Server Moderation Session Service | [`mihaela5/session-service:0.5.0`](https://hub.docker.com/r/mihaela5/session-service) | 3002 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `PLAYER_SERVICE_URL` (shift XP is sent there on `end`), `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` — if unset, falls back to mocked responses for those dependencies |
 | Applicant Service | [`ciprik13/applicant-service:0.4.0`](https://hub.docker.com/r/ciprik13/applicant-service) | 3003 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `STORE_DRIVER` (`mongo` by default, `memory` runs without a database), `DECEPTIVE_RATE` (share of deceptive applicants, `0.35` by default), `UNIVERSITY_RECORD_SERVICE_URL` (if unset, University Record is mocked) and `HTTP_TIMEOUT_MS` (`2000` by default) |
 | Credential Service | [`ciprik13/credential-service:0.4.0`](https://hub.docker.com/r/ciprik13/credential-service) | 3004 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `CREDENTIAL_SIGNING_SECRET` (HMAC secret for credential authenticity — without it the service falls back to a development secret and credentials issued elsewhere are reported as `FORGED_SIGNATURE`); optionally `STORE_DRIVER` (`mongo` by default, `memory` runs without a database), `APPLICANT_SERVICE_URL` (if unset, Applicant Service is mocked) and `HTTP_TIMEOUT_MS` (`2000` by default) |
 | Server Rules Service | [`ion190/server-rules-service:0.3.0`](https://hub.docker.com/r/ion190/server-rules-service) | 3005 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `UNIVERSITY_RECORD_SERVICE_URL` — if unset or if University Record Service is unreachable, Server Rules Service falls back to its built-in mock university records

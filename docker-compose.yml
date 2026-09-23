@@ -34,7 +34,7 @@ services:
 
   # ==================== Server Moderation Session Service (Mihaela) ====================
   session-service:
-    image: mihaela5/session-service:0.4.0
+    image: mihaela5/session-service:0.5.0
     restart: unless-stopped
     ports:
       - "3002:3002"
