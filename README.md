@@ -243,15 +243,13 @@ Example request:
 
 The Server Rules Service evaluates all enabled rules stored in MongoDB.
 
-When external-service mode is enabled, the service requests university information from the University Record Service using:
+The service requests university information from the University Record Service using:
 
 ```text
 GET /records/{applicantId}?requestingPlayerId=server-rules-service
 ```
 
-The `applicant` object supplied to `/rules/evaluate` can provide fields directly used by rules. The service can also obtain additional university data from the University Record Service.
-
-The service supports a mock external-service mode through `MOCK_EXTERNAL_SERVICES=true`. This allows rule evaluation to be tested without requiring the University Record Service to be available.
+The University Record Service is configured through `UNIVERSITY_RECORD_SERVICE_URL`. If the URL is not configured, or the University Record Service is unreachable, Server Rules Service automatically falls back to its built-in mock university record data. A non-success HTTP response from the University Record Service is treated as an error.
 
 The current Lab 1 rule set includes:
 
@@ -517,7 +515,7 @@ Each service is pushed to Docker Hub as a versioned, public image — no Dockerf
 | Server Moderation Session Service | [`mihaela5/session-service:0.4.0`](https://hub.docker.com/r/mihaela5/session-service) | 3002 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `PLAYER_SERVICE_URL` (shift XP is sent there on `end`), `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` — if unset, falls back to mocked responses for those dependencies |
 | Applicant Service | [`ciprik13/applicant-service:0.4.0`](https://hub.docker.com/r/ciprik13/applicant-service) | 3003 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `STORE_DRIVER` (`mongo` by default, `memory` runs without a database), `DECEPTIVE_RATE` (share of deceptive applicants, `0.35` by default), `UNIVERSITY_RECORD_SERVICE_URL` (if unset, University Record is mocked) and `HTTP_TIMEOUT_MS` (`2000` by default) |
 | Credential Service | [`ciprik13/credential-service:0.4.0`](https://hub.docker.com/r/ciprik13/credential-service) | 3004 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `CREDENTIAL_SIGNING_SECRET` (HMAC secret for credential authenticity — without it the service falls back to a development secret and credentials issued elsewhere are reported as `FORGED_SIGNATURE`); optionally `STORE_DRIVER` (`mongo` by default, `memory` runs without a database), `APPLICANT_SERVICE_URL` (if unset, Applicant Service is mocked) and `HTTP_TIMEOUT_MS` (`2000` by default) |
-| Server Rules Service | [`ion190/server-rules-service:0.3.0`](https://hub.docker.com/r/ion190/server-rules-service) | 3005 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `UNIVERSITY_RECORD_SERVICE_URL` and `MOCK_EXTERNAL_SERVICES` (`"true"` answers external lookups from mocks) |
+| Server Rules Service | [`ion190/server-rules-service:0.3.0`](https://hub.docker.com/r/ion190/server-rules-service) | 3005 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `UNIVERSITY_RECORD_SERVICE_URL` — if unset or if University Record Service is unreachable, Server Rules Service falls back to its built-in mock university records
 | University Record Service | [`ion190/university-record-service:0.1.0`](https://hub.docker.com/r/ion190/university-record-service) | 3006 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` |
 | Moderation Service | [`d3adeye/moderation-service:0.3.0`](https://hub.docker.com/r/d3adeye/moderation-service) | 3007 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` — if unset, falls back to mocked responses for those dependencies — and `DISCORD_DMS_SERVICE_URL` (verdicts are not posted to chat when unset) |
 | Discord DMs Service | [`d3adeye/discord-dms-service:0.3.0`](https://hub.docker.com/r/d3adeye/discord-dms-service) | 3008 | `PORT`, `MONGODB_URI`, `MONGODB_DATABASE`; optionally `SESSION_SERVICE_URL` — when set, a session is checked against Server Moderation Session Service before its channels or roster are created; when unset, the roster is managed through this service's own `/sessions/{id}/members` endpoints |
