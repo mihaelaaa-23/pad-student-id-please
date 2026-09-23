@@ -239,6 +239,7 @@ Notes for callers:
 
 - `decision` is `accept`, `reject`, `flag` or `ban`.
 - A second `POST /moderation/decide` for the same applicant in the same session is `409`.
+- `violatedRules` carries the rule ids returned by Server Rules Service, the credential issue codes prefixed with `credential: `, and record findings prefixed with `record: `.
 - Errors come back as `{error: {code: string, message: string}}`.
  
 #### Discord DMs Service
@@ -273,6 +274,7 @@ Notes for callers:
 - Renaming a channel keeps its id, its messages and its access grants. Deleting a channel deletes its messages.
 - `POST /sessions/{id}/members` replaces the player's assignment when called again.
 - Messages come back oldest first. A message posted over HTTP is also sent to every WebSocket listener on the channel, and every message is stored before it is sent.
+- `POST /sessions/{id}/bootstrap` and `POST /sessions/{id}/members` answer `404` when `SESSION_SERVICE_URL` is set and Server Moderation Session Service does not know that session. With it unset the check is skipped, and a Session Service that is unreachable does not block the request.
 - Errors come back as `{error: {code: string, message: string}}`.
 
 ### Shared Enumerations and Field Formats
