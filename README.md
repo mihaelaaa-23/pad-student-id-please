@@ -542,7 +542,6 @@ See `docker-compose.yml` at the repo root for the full setup, including each ser
 
 Each database runs `db/<service>/init.*` on first startup and persists its data in a named Docker volume, so data survives `docker compose down`. Use `docker compose down -v` to wipe it.
 
-> **Known gap:** until University Record Service is published, its block in `docker-compose.yml` still contains placeholders, and Compose refuses to load the file. To run the stack in the meantime, comment out the `university-record-service` block locally (don't commit that change). Session Service and Server Rules Service fall back to their University Record mocks.
 
 ## Project Board
 
