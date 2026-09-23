@@ -237,10 +237,8 @@ Notes for callers (Applicant Service, Credential Service):
 
 | Method | Path | Request | Response |
 |---|---|---|---|
-| GET | /records/{applicantId} | `{requestingPlayerId: string}` | `{applicantId: string, fields: object}` (scoped to player's access) |
+| GET | /records/{applicantId} | `?requestingPlayerId=string` (query parameter) | `{applicantId: string, fields: object}` (scoped to player's access) |
 
-Note from Applicant Service, which calls this endpoint: `GET /records/{applicantId}` carries `requestingPlayerId` in a request body. A request body on GET has no defined semantics in RFC 9110 and Node's `fetch` refuses to send one, so the client sends it as `?requestingPlayerId=string` (query parameter). Moving it to a query parameter or a header in this table would remove the divergence.
- 
 #### Moderation Service
 | Method | Path | Request | Response |
 |---|---|---|---|
