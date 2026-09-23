@@ -180,6 +180,7 @@ This has a few direct consequences for how the system behaves:
 | POST | /sessions/{id}/end | — | `{sessionId: string, result: string, score: int}` |
 | POST | /sessions/{id}/process-applicant | — | `{sessionId: string, processedCount: int, currentApplicantId: string, applicant: object, credentialCheck: object, rulesCheck: object, universityRecords: object}` |
 | GET | /status | — | `{status: string, database: string}` — `503` with `status: "degraded"` and `database: "down"` when PostgreSQL is unreachable |
+| DELETE | /sessions/{id} | — | `{sessionId: string, deleted: boolean}` — `404 NOT_FOUND` if unknown |
 
 Notes for callers:
 
@@ -232,7 +233,7 @@ Notes for callers (Applicant Service, Credential Service):
 |---|---|---|---|
 | GET | /records/{applicantId} | `{requestingPlayerId: string}` | `{applicantId: string, fields: object}` (scoped to player's access) |
 
-Note from Applicant Service, which calls this endpoint: `GET /records/{applicantId}` carries `requestingPlayerId` in a request body. A request body on GET has no defined semantics in RFC 9110 and Node's `fetch` refuses to send one, so the client sends it as `?requestingPlayerId=string`. Moving it to a query parameter or a header in this table would remove the divergence.
+Note from Applicant Service, which calls this endpoint: `GET /records/{applicantId}` carries `requestingPlayerId` in a request body. A request body on GET has no defined semantics in RFC 9110 and Node's `fetch` refuses to send one, so the client sends it as `?requestingPlayerId=string` (query parameter). Moving it to a query parameter or a header in this table would remove the divergence.
  
 #### Moderation Service
 | Method | Path | Request | Response |
@@ -447,7 +448,7 @@ Each service is pushed to Docker Hub as a versioned, public image — no Dockerf
 | Service | Docker Hub Image | Port | Run Requirements |
 |---|---|---|---|
 | Player Service | [`mihaela5/player-service:0.4.0`](https://hub.docker.com/r/mihaela5/player-service) | 3001 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` |
-| Server Moderation Session Service | [`mihaela5/session-service:0.4.0`](https://hub.docker.com/r/mihaela5/session-service) | 3002 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `PLAYER_SERVICE_URL` (shift XP is sent there on `end`), `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` — if unset, falls back to mocked responses for those dependencies |
+| Server Moderation Session Service | [`mihaela5/session-service:0.5.0`](https://hub.docker.com/r/mihaela5/session-service) | 3002 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `PLAYER_SERVICE_URL` (shift XP is sent there on `end`), `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` — if unset, falls back to mocked responses for those dependencies |
 | Applicant Service | [`ciprik13/applicant-service:0.4.0`](https://hub.docker.com/r/ciprik13/applicant-service) | 3003 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `STORE_DRIVER` (`mongo` by default, `memory` runs without a database), `DECEPTIVE_RATE` (share of deceptive applicants, `0.35` by default), `UNIVERSITY_RECORD_SERVICE_URL` (if unset, University Record is mocked) and `HTTP_TIMEOUT_MS` (`2000` by default) |
 | Credential Service | [`ciprik13/credential-service:0.4.0`](https://hub.docker.com/r/ciprik13/credential-service) | 3004 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `CREDENTIAL_SIGNING_SECRET` (HMAC secret for credential authenticity — without it the service falls back to a development secret and credentials issued elsewhere are reported as `FORGED_SIGNATURE`); optionally `STORE_DRIVER` (`mongo` by default, `memory` runs without a database), `APPLICANT_SERVICE_URL` (if unset, Applicant Service is mocked) and `HTTP_TIMEOUT_MS` (`2000` by default) |
 | Server Rules Service | [`ion190/server-rules-service:0.3.0`](https://hub.docker.com/r/ion190/server-rules-service) | 3005 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `UNIVERSITY_RECORD_SERVICE_URL` and `MOCK_EXTERNAL_SERVICES` (`"true"` answers external lookups from mocks) |
