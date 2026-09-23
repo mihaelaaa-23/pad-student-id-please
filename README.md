@@ -170,6 +170,12 @@ This has a few direct consequences for how the system behaves:
 | PATCH | /players/{id}/xp | `{xpGained: int, reason: string}` | `{playerId: string, xp: int, level: int}` |
 | DELETE | /players/{id} | — | `{playerId: string, deleted: boolean}` |
 | GET | /status | — | `{status: string, database: string}` — `503` with `status: "degraded"` and `database: "down"` when PostgreSQL is unreachable |
+
+
+>Notes for callers:
+>- `POST /players/login` returns `401 UNAUTHORIZED` for an unknown username or wrong password.
+>- A duplicate username on `POST /players/register` returns `409 CONFLICT`; unknown IDs return `404 NOT_FOUND`.
+>- Errors come back as `{error: {code: string, message: string}}`.
  
 #### Server Moderation Session Service
 | Method | Path | Request | Response |
