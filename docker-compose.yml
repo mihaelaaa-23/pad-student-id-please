@@ -208,7 +208,7 @@ services:
 
   # ==================== Moderation Service (Liviu) ====================
   moderation-service:
-    image: d3adeye/moderation-service:0.2.0
+    image: d3adeye/moderation-service:0.3.0
     restart: unless-stopped
     ports:
       - "3007:3007"
@@ -242,7 +242,7 @@ services:
 
   # ==================== Discord DMs Service (Liviu) ====================
   discord-dms-service:
-    image: d3adeye/discord-dms-service:0.2.0
+    image: d3adeye/discord-dms-service:0.3.0
     restart: unless-stopped
     ports:
       - "3008:3008"
@@ -250,6 +250,7 @@ services:
       PORT: 3008
       MONGODB_URI: mongodb://${DISCORD_DMS_DB_USER}:${DISCORD_DMS_DB_PASSWORD}@discord-dms-db:27017/?authSource=admin
       MONGODB_DATABASE: ${DISCORD_DMS_DB_NAME}
+      SESSION_SERVICE_URL: http://session-service:3002
     depends_on:
       discord-dms-db:
         condition: service_healthy
