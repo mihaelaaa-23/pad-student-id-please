@@ -287,6 +287,37 @@
       }
     },
     {
+      "name": "End Session Again",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"ending an already-ended session is a 409\", function () {",
+              "    pm.response.to.have.status(409);",
+              "    pm.expect(pm.response.json().error.code).to.eql(\"CONFLICT\");",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": {
+          "raw": "{{baseUrl}}/sessions/{{sessionId}}/end",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "sessions",
+            "{{sessionId}}",
+            "end"
+          ]
+        }
+      }
+    },
+    {
       "name": "Get Nonexistent Session",
       "event": [
         {
