@@ -1,0 +1,291 @@
+services:
+  # ==================== Player Service (Mihaela) ====================
+  player-service:
+    image: mihaela5/player-service:0.5.0
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      PORT: 3001
+      DB_HOST: player-db
+      DB_PORT: 5432
+      DB_USER: ${PLAYER_DB_USER}
+      DB_PASSWORD: ${PLAYER_DB_PASSWORD}
+      DB_NAME: ${PLAYER_DB_NAME}
+    depends_on:
+      player-db:
+        condition: service_healthy
+
+  player-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${PLAYER_DB_USER}
+      POSTGRES_PASSWORD: ${PLAYER_DB_PASSWORD}
+      POSTGRES_DB: ${PLAYER_DB_NAME}
+    volumes:
+      - player_db_data:/var/lib/postgresql/data
+      - ./db/player-service/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PLAYER_DB_USER} -d ${PLAYER_DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ==================== Server Moderation Session Service (Mihaela) ====================
+  session-service:
+    image: mihaela5/session-service:0.6.0
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    environment:
+      PORT: 3002
+      DB_HOST: session-db
+      DB_PORT: 5432
+      DB_USER: ${SESSION_DB_USER}
+      DB_PASSWORD: ${SESSION_DB_PASSWORD}
+      DB_NAME: ${SESSION_DB_NAME}
+      PLAYER_SERVICE_URL: http://player-service:3001
+      APPLICANT_SERVICE_URL: http://applicant-service:3003
+      CREDENTIAL_SERVICE_URL: http://credential-service:3004
+      RULES_SERVICE_URL: http://server-rules-service:3005
+      UNIVERSITY_RECORD_SERVICE_URL: http://university-record-service:3006
+    depends_on:
+      session-db:
+        condition: service_healthy
+
+  session-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${SESSION_DB_USER}
+      POSTGRES_PASSWORD: ${SESSION_DB_PASSWORD}
+      POSTGRES_DB: ${SESSION_DB_NAME}
+    volumes:
+      - session_db_data:/var/lib/postgresql/data
+      - ./db/session-service/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${SESSION_DB_USER} -d ${SESSION_DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ==================== Applicant Service (Ciprian) ====================
+  applicant-service:
+    image: ciprik13/applicant-service:0.4.0
+    restart: unless-stopped
+    ports:
+      - "3003:3003"
+    environment:
+      PORT: 3003
+      STORE_DRIVER: mongo
+      DECEPTIVE_RATE: ${APPLICANT_DECEPTIVE_RATE:-0.35}
+      DB_HOST: applicant-db
+      DB_PORT: 27017
+      DB_USER: ${APPLICANT_DB_USER}
+      DB_PASSWORD: ${APPLICANT_DB_PASSWORD}
+      DB_NAME: ${APPLICANT_DB_NAME}
+      UNIVERSITY_RECORD_SERVICE_URL: http://university-record-service:3006
+    depends_on:
+      applicant-db:
+        condition: service_healthy
+
+  applicant-db:
+    image: mongo:7
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${APPLICANT_DB_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${APPLICANT_DB_PASSWORD}
+      MONGO_INITDB_DATABASE: ${APPLICANT_DB_NAME}
+    volumes:
+      - applicant_db_data:/data/db
+      - ./db/applicant-service/init.js:/docker-entrypoint-initdb.d/init.js:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\""]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ==================== Credential Service (Ciprian) ====================
+  credential-service:
+    image: ciprik13/credential-service:0.4.0
+    restart: unless-stopped
+    ports:
+      - "3004:3004"
+    environment:
+      PORT: 3004
+      STORE_DRIVER: mongo
+      CREDENTIAL_SIGNING_SECRET: ${CREDENTIAL_SIGNING_SECRET}
+      # Reached over the compose network, by service name. Unset would mean the
+      # client answers from its mock even though the real service is running here.
+      APPLICANT_SERVICE_URL: http://applicant-service:3003
+      DB_HOST: credential-db
+      DB_PORT: 27017
+      DB_USER: ${CREDENTIAL_DB_USER}
+      DB_PASSWORD: ${CREDENTIAL_DB_PASSWORD}
+      DB_NAME: ${CREDENTIAL_DB_NAME}
+    depends_on:
+      credential-db:
+        condition: service_healthy
+
+  credential-db:
+    image: mongo:7
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${CREDENTIAL_DB_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${CREDENTIAL_DB_PASSWORD}
+      MONGO_INITDB_DATABASE: ${CREDENTIAL_DB_NAME}
+    volumes:
+      - credential_db_data:/data/db
+      - ./db/credential-service/init.js:/docker-entrypoint-initdb.d/init.js:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\""]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ==================== Server Rules Service (Ion) ====================
+  server-rules-service:
+    image: ion190/server-rules-service:0.4.1
+    restart: unless-stopped
+    ports:
+      - "3005:3005"
+    environment:
+      PORT: 3005
+      DB_HOST: rules-db
+      DB_PORT: 27017
+      DB_USER: ${RULES_DB_USER}
+      DB_PASSWORD: ${RULES_DB_PASSWORD}
+      DB_NAME: ${RULES_DB_NAME}
+      UNIVERSITY_RECORD_SERVICE_URL: http://university-record-service:3006
+    depends_on:
+      rules-db:
+        condition: service_healthy
+
+  rules-db:
+    image: mongo:7
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${RULES_DB_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${RULES_DB_PASSWORD}
+      MONGO_INITDB_DATABASE: ${RULES_DB_NAME}
+    volumes:
+      - rules_db_data:/data/db
+      - ./db/server-rules-service/init.js:/docker-entrypoint-initdb.d/init.js:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\""]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ==================== University Record Service (Ion) ====================
+  university-record-service:
+    image: ion190/university-record-service:0.1.0
+    restart: unless-stopped
+    ports:
+      - "3006:3006"
+    environment:
+      PORT: 3006
+      DB_HOST: university-record-db
+      DB_PORT: 5432
+      DB_USER: ${UNIVERSITY_RECORD_DB_USER}
+      DB_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
+      DB_NAME: ${UNIVERSITY_RECORD_DB_NAME}
+    depends_on:
+      university-record-db:
+        condition: service_healthy
+
+  university-record-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${UNIVERSITY_RECORD_DB_USER}
+      POSTGRES_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
+      POSTGRES_DB: ${UNIVERSITY_RECORD_DB_NAME}
+    volumes:
+      - university_record_db_data:/var/lib/postgresql/data
+      - ./db/university-record-service/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${UNIVERSITY_RECORD_DB_USER} -d ${UNIVERSITY_RECORD_DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ==================== Moderation Service (Liviu) ====================
+  moderation-service:
+    image: d3adeye/moderation-service:0.3.0
+    restart: unless-stopped
+    ports:
+      - "3007:3007"
+    environment:
+      PORT: 3007
+      APPLICANT_SERVICE_URL: http://applicant-service:3003
+      CREDENTIAL_SERVICE_URL: http://credential-service:3004
+      RULES_SERVICE_URL: http://server-rules-service:3005
+      UNIVERSITY_RECORD_SERVICE_URL: http://university-record-service:3006
+      DISCORD_DMS_SERVICE_URL: http://discord-dms-service:3008
+      DB_HOST: moderation-db
+      DB_PORT: 5432
+      DB_USER: ${MODERATION_DB_USER}
+      DB_PASSWORD: ${MODERATION_DB_PASSWORD}
+      DB_NAME: ${MODERATION_DB_NAME}
+    depends_on:
+      moderation-db:
+        condition: service_healthy
+
+  moderation-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${MODERATION_DB_USER}
+      POSTGRES_PASSWORD: ${MODERATION_DB_PASSWORD}
+      POSTGRES_DB: ${MODERATION_DB_NAME}
+    volumes:
+      - moderation_db_data:/var/lib/postgresql/data
+      - ./db/moderation-service/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MODERATION_DB_USER} -d ${MODERATION_DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ==================== Discord DMs Service (Liviu) ====================
+  discord-dms-service:
+    image: d3adeye/discord-dms-service:0.3.0
+    restart: unless-stopped
+    ports:
+      - "3008:3008"
+    environment:
+      PORT: 3008
+      MONGODB_URI: mongodb://${DISCORD_DMS_DB_USER}:${DISCORD_DMS_DB_PASSWORD}@discord-dms-db:27017/?authSource=admin
+      MONGODB_DATABASE: ${DISCORD_DMS_DB_NAME}
+      SESSION_SERVICE_URL: http://session-service:3002
+    depends_on:
+      discord-dms-db:
+        condition: service_healthy
+
+  discord-dms-db:
+    image: mongo:7
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${DISCORD_DMS_DB_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${DISCORD_DMS_DB_PASSWORD}
+      MONGO_INITDB_DATABASE: ${DISCORD_DMS_DB_NAME}
+    volumes:
+      - discord_dms_db_data:/data/db
+      - ./db/discord-dms-service/init.js:/docker-entrypoint-initdb.d/init.js:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\""]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  player_db_data:
+  session_db_data:
+  applicant_db_data:
+  credential_db_data:
+  rules_db_data:
+  university_record_db_data:
+  moderation_db_data:
+  discord_dms_db_data:

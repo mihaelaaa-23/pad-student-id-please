@@ -1,0 +1,456 @@
+{
+  "info": {
+    "_postman_id": "c2f2c3c1-2222-4b2b-9d2b-session0001",
+    "name": "Server Moderation Session Service",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3002"
+    },
+    {
+      "key": "sessionId",
+      "value": ""
+    },
+    {
+      "key": "currentApplicantId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Status Check",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('service reports ok', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(json.status).to.eql('ok');",
+              "    pm.expect(json.database).to.eql('up');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "status"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Create Session",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('session was created', function () {",
+              "    pm.response.to.have.status(201);",
+              "    pm.expect(json.sessionId).to.be.a('string');",
+              "    pm.expect(json.status).to.eql('active');",
+              "});",
+              "pm.collectionVariables.set('sessionId', json.sessionId);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"moderatorId\": \"p_mod1\",\n  \"juniorIds\": [\"p_jr1\", \"p_jr2\"]\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/sessions",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "sessions"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Create Session Without ModeratorId",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('missing moderatorId is rejected', function () {",
+              "    pm.response.to.have.status(422);",
+              "    pm.expect(json.error.code).to.eql('VALIDATION_FAILED');",
+              "    pm.expect(json.error.message).to.be.a('string');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/sessions",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "sessions"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Join Session",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('junior moderator joined', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(json.sessionId).to.eql(pm.collectionVariables.get('sessionId'));",
+              "    pm.expect(json.role).to.eql('junior');",
+              "    pm.expect(json.status).to.eql('active');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"playerId\": \"p_jr3\",\n  \"role\": \"junior\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/sessions/{{sessionId}}/join",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "sessions",
+            "{{sessionId}}",
+            "join"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Process Applicant",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('applicant was processed', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(json.sessionId).to.eql(pm.collectionVariables.get('sessionId'));",
+              "    pm.expect(json.processedCount).to.eql(1);",
+              "    pm.expect(json.currentApplicantId).to.be.a('string');",
+              "});",
+              "pm.test('mocked dependency responses have the contract shape', function () {",
+              "    pm.expect(json.applicant).to.include.all.keys('applicantId', 'name', 'studentId', 'major', 'role', 'status');",
+              "    pm.expect(json.credentialCheck).to.include.all.keys('applicantId', 'valid', 'issues');",
+              "    pm.expect(json.rulesCheck).to.include.all.keys('passed', 'violatedRules');",
+              "    pm.expect(json.universityRecords).to.include.all.keys('applicantId', 'fields');",
+              "});",
+              "pm.test('every dependency reports whether it was live or mocked', function () {",
+              "    pm.expect(json.sources).to.include.all.keys('applicant', 'credentialCheck', 'rulesCheck', 'universityRecords');",
+              "    Object.values(json.sources).forEach(function (s) { pm.expect(['live', 'mock']).to.include(s); });",
+              "});",
+              "pm.test('applicant uses the contract enumerations', function () {",
+              "    pm.expect(['student_faf', 'student_other', 'teaching_assistant', 'staff', 'alumnus', 'outsider']).to.include(json.applicant.role);",
+              "    pm.expect(['active', 'graduated', 'suspended', 'expelled', 'none']).to.include(json.applicant.status);",
+              "});",
+              "pm.test('credential check is consistent', function () {",
+              "    pm.expect(json.credentialCheck.valid).to.eql(json.credentialCheck.issues.length === 0);",
+              "});",
+              "pm.collectionVariables.set('currentApplicantId', json.currentApplicantId);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": {
+          "raw": "{{baseUrl}}/sessions/{{sessionId}}/process-applicant",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "sessions",
+            "{{sessionId}}",
+            "process-applicant"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Get Session",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('session reflects the processed applicant', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(json.sessionId).to.eql(pm.collectionVariables.get('sessionId'));",
+              "    pm.expect(json.currentApplicantId).to.eql(pm.collectionVariables.get('currentApplicantId'));",
+              "    pm.expect(json.processedCount).to.eql(1);",
+              "    pm.expect(json.status).to.eql('active');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/sessions/{{sessionId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "sessions",
+            "{{sessionId}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "End Session",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('session was ended', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(json.sessionId).to.eql(pm.collectionVariables.get('sessionId'));",
+              "    pm.expect(['passed', 'failed']).to.include(json.result);",
+              "    pm.expect(json.score).to.be.a('number');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": {
+          "raw": "{{baseUrl}}/sessions/{{sessionId}}/end",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "sessions",
+            "{{sessionId}}",
+            "end"
+          ]
+        }
+      }
+    },
+    {
+      "name": "End Session Again",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"ending an already-ended session is a 409\", function () {",
+              "    pm.response.to.have.status(409);",
+              "    pm.expect(pm.response.json().error.code).to.eql(\"CONFLICT\");",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "url": {
+          "raw": "{{baseUrl}}/sessions/{{sessionId}}/end",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "sessions",
+            "{{sessionId}}",
+            "end"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Delete Session",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('session was deleted', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(json.sessionId).to.eql(pm.collectionVariables.get('sessionId'));",
+              "    pm.expect(json.deleted).to.eql(true);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "DELETE",
+        "url": {
+          "raw": "{{baseUrl}}/sessions/{{sessionId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "sessions",
+            "{{sessionId}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Get Deleted Session",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('deleted session is a 404', function () {",
+              "    pm.response.to.have.status(404);",
+              "    pm.expect(pm.response.json().error.code).to.eql('NOT_FOUND');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/sessions/{{sessionId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "sessions",
+            "{{sessionId}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Delete Session Again",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('deleting a missing session is a 404', function () {",
+              "    pm.response.to.have.status(404);",
+              "    pm.expect(pm.response.json().error.code).to.eql('NOT_FOUND');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "DELETE",
+        "url": {
+          "raw": "{{baseUrl}}/sessions/{{sessionId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "sessions",
+            "{{sessionId}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Get Nonexistent Session",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('nonexistent session is a 404', function () {",
+              "    pm.response.to.have.status(404);",
+              "    pm.expect(json.error.code).to.eql('NOT_FOUND');",
+              "    pm.expect(json.error.message).to.be.a('string');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/sessions/does-not-exist",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "sessions",
+            "does-not-exist"
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+[submodule "services/player-service"]
+        path = services/player-service
+        url = https://github.com/mihaelaaa-23/player-service.git
+        branch = dev
+[submodule "services/server-moderation-session-service"]
+        path = services/server-moderation-session-service
+        url = https://github.com/mihaelaaa-23/server-moderation-session-service.git
+        branch = dev
+[submodule "services/applicant-service"]
+	path = services/applicant-service
+	url = https://github.com/ciprik13/applicant-service.git
+	branch = dev
+[submodule "services/credential-service"]
+	path = services/credential-service
+	url = https://github.com/ciprik13/credential-service.git
+	branch = dev
+[submodule "services/moderation-service"]
+	path = services/moderation-service
+	url = https://github.com/D3adeYe69/Moderation-Service
+	branch = dev
+[submodule "services/discord-dms-service"]
+	path = services/discord-dms-service
+	url = https://github.com/D3adeYe69/Discord-DMs-Service
+	branch = dev
+[submodule "services/server-rules-service"]
+	path = services/server-rules-service
+	url = https://github.com/ion190/server-rules-service.git
+	branch = dev
+[submodule "services/university-record-service"]
+	path = services/university-record-service
+	url = https://github.com/ion190/university-record-service.git
+	branch = dev
+

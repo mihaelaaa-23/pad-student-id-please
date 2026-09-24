@@ -1,0 +1,182 @@
+{
+  "info": {
+    "_postman_id": "8e2d4c71-91b5-4f36-a7c2-server-rules001",
+    "name": "Server Rules Service",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3005"
+    },
+    {
+      "key": "applicantId",
+      "value": "applicant-001"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health Check",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('reports ok', function () { pm.expect(pm.response.json().status).to.eql('ok'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/health",
+          "host": ["{{baseUrl}}"],
+          "path": ["health"]
+        }
+      }
+    },
+    {
+      "name": "Get Current Rules",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('returns rules array', function () { pm.expect(json.rules).to.be.an('array'); });",
+              "pm.test('contains expected rules', function () {",
+              "  const ids = json.rules.map(function (rule) { return rule.id; });",
+              "  pm.expect(ids).to.include('ONLY_FAF_STUDENTS');",
+              "  pm.expect(ids).to.include('ACTIVE_STATUS_REQUIRED');",
+              "  pm.expect(ids).to.include('NO_PREVIOUS_BAN');",
+              "});",
+              "pm.test('does not expose internal conditions', function () {",
+              "  json.rules.forEach(function (rule) { pm.expect(rule).to.not.have.property('condition'); });",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/rules/current",
+          "host": ["{{baseUrl}}"],
+          "path": ["rules", "current"]
+        }
+      }
+    },
+    {
+      "name": "Evaluate Applicant - Passing Applicant",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('applicant passes all rules', function () { pm.expect(json.passed).to.eql(true); });",
+              "pm.test('has no violated rules', function () { pm.expect(json.violatedRules).to.be.an('array').that.is.empty; });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"applicantId\": \"{{applicantId}}\",\n  \"applicant\": {\n    \n    \"previousBan\": false\n  }\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/rules/evaluate",
+          "host": ["{{baseUrl}}"],
+          "path": ["rules", "evaluate"]
+        }
+      }
+    },
+    {
+      "name": "Evaluate Applicant - Violates Rules",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('applicant fails at least one rule', function () { pm.expect(json.passed).to.eql(false); });",
+              "pm.test('reports violated rules', function () { pm.expect(json.violatedRules).to.be.an('array').that.is.not.empty; });",
+              "pm.test('reports FAF rule violation', function () { pm.expect(json.violatedRules).to.include('ONLY_FAF_STUDENTS'); });",
+              "pm.test('reports previous ban violation', function () { pm.expect(json.violatedRules).to.include('NO_PREVIOUS_BAN'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"applicantId\": \"{{applicantId}}\",\n  \"applicant\": {\n    \"role\": \"other\",\n    \"previousBan\": true\n  }\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/rules/evaluate",
+          "host": ["{{baseUrl}}"],
+          "path": ["rules", "evaluate"]
+        }
+      }
+    },
+    {
+      "name": "Evaluate Applicant - Missing Applicant ID",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('status is 422', function () { pm.response.to.have.status(422); });",
+              "pm.test('reports validation failure', function () { pm.expect(json.error.code).to.eql('VALIDATION_FAILED'); });",
+              "pm.test('reports applicantId requirement', function () { pm.expect(json.error.message).to.eql('applicantId is required'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"applicant\": {\n    \"role\": \"student_faf\"\n  }\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/rules/evaluate",
+          "host": ["{{baseUrl}}"],
+          "path": ["rules", "evaluate"]
+        }
+      }
+    }
+  ]
+}
