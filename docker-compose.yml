@@ -146,7 +146,7 @@ services:
 
   # ==================== Server Rules Service (Ion) ====================
   server-rules-service:
-    image: ion190/server-rules-service:0.4.0
+    image: ion190/server-rules-service:0.4.1
     restart: unless-stopped
     ports:
       - "3005:3005"
