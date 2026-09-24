@@ -102,7 +102,7 @@
             "exec": [
               "const json = pm.response.json();",
               "pm.test('missing moderatorId is rejected', function () {",
-              "    pm.response.to.have.status(400);",
+              "    pm.response.to.have.status(422);",
               "    pm.expect(json.error.code).to.eql('VALIDATION_FAILED');",
               "    pm.expect(json.error.message).to.be.a('string');",
               "});"
@@ -197,6 +197,17 @@
               "    pm.expect(json.credentialCheck).to.include.all.keys('applicantId', 'valid', 'issues');",
               "    pm.expect(json.rulesCheck).to.include.all.keys('passed', 'violatedRules');",
               "    pm.expect(json.universityRecords).to.include.all.keys('applicantId', 'fields');",
+              "});",
+              "pm.test('every dependency reports whether it was live or mocked', function () {",
+              "    pm.expect(json.sources).to.include.all.keys('applicant', 'credentialCheck', 'rulesCheck', 'universityRecords');",
+              "    Object.values(json.sources).forEach(function (s) { pm.expect(['live', 'mock']).to.include(s); });",
+              "});",
+              "pm.test('applicant uses the contract enumerations', function () {",
+              "    pm.expect(['student_faf', 'student_other', 'teaching_assistant', 'staff', 'alumnus', 'outsider']).to.include(json.applicant.role);",
+              "    pm.expect(['active', 'graduated', 'suspended', 'expelled', 'none']).to.include(json.applicant.status);",
+              "});",
+              "pm.test('credential check is consistent', function () {",
+              "    pm.expect(json.credentialCheck.valid).to.eql(json.credentialCheck.issues.length === 0);",
               "});",
               "pm.collectionVariables.set('currentApplicantId', json.currentApplicantId);"
             ]
