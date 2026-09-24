@@ -1,7 +1,7 @@
 services:
   # ==================== Player Service (Mihaela) ====================
   player-service:
-    image: mihaela5/player-service:0.4.0
+    image: mihaela5/player-service:0.5.0
     restart: unless-stopped
     ports:
       - "3001:3001"
@@ -34,7 +34,7 @@ services:
 
   # ==================== Server Moderation Session Service (Mihaela) ====================
   session-service:
-    image: mihaela5/session-service:0.5.0
+    image: mihaela5/session-service:0.6.0
     restart: unless-stopped
     ports:
       - "3002:3002"
@@ -49,6 +49,7 @@ services:
       APPLICANT_SERVICE_URL: http://applicant-service:3003
       CREDENTIAL_SERVICE_URL: http://credential-service:3004
       RULES_SERVICE_URL: http://server-rules-service:3005
+      UNIVERSITY_RECORD_SERVICE_URL: http://university-record-service:3006
     depends_on:
       session-db:
         condition: service_healthy
@@ -84,6 +85,7 @@ services:
       DB_USER: ${APPLICANT_DB_USER}
       DB_PASSWORD: ${APPLICANT_DB_PASSWORD}
       DB_NAME: ${APPLICANT_DB_NAME}
+      UNIVERSITY_RECORD_SERVICE_URL: http://university-record-service:3006
     depends_on:
       applicant-db:
         condition: service_healthy
@@ -217,6 +219,10 @@ services:
       - "3007:3007"
     environment:
       PORT: 3007
+      APPLICANT_SERVICE_URL: http://applicant-service:3003
+      CREDENTIAL_SERVICE_URL: http://credential-service:3004
+      RULES_SERVICE_URL: http://server-rules-service:3005
+      UNIVERSITY_RECORD_SERVICE_URL: http://university-record-service:3006
       DISCORD_DMS_SERVICE_URL: http://discord-dms-service:3008
       DB_HOST: moderation-db
       DB_PORT: 5432

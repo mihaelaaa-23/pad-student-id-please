@@ -106,7 +106,7 @@ Services sit inside a single **Service Layer** boundary, with the Client enterin
 **Service Relationships**
 
 Server Moderation Session Service acts as the central coordinator during an active shift. It queries Applicant Service for the current applicant, Credential Service to check submitted documents, Server Rules Service to evaluate the applicant against current access rules, and University Record Service to pull any hidden records needed for verification. Once a shift ends, it publishes the result to Player Service so XP and levels can be updated.
-This is exposed concretely through `POST /sessions/{id}/process-applicant`, which calls the real services when their URLs are configured (as in the shared `docker-compose.yml`) and falls back to contract-shaped mocks when a service is unset or unreachable. University Record Service is currently always mocked, since it isn't published yet.
+This is exposed concretely through `POST /sessions/{id}/process-applicant`, which calls the real services when their URLs are configured (as they all are in the shared `docker-compose.yml`) and falls back to contract-shaped mocks when a service is unset or unreachable. The response's `sources` object says, per dependency, whether the answer was `live` or `mock`.
 
 Moderation Service independently gathers the same four services — Applicant, Credential, Server Rules, and University Record — to determine whether the Moderator's decision (Accept, Reject, Flag, or Ban) was correct under the current rules. It does not talk to Player Service or Session Service directly; it only consumes applicant-side data to produce a verdict.
 
@@ -164,7 +164,7 @@ This has a few direct consequences for how the system behaves:
 #### Player Service
 | Method | Path | Request | Response |
 |---|---|---|---|
-| POST | /players/register | `{username: string, email: string, password: string}` | `{playerId: string, username: string, level: int, xp: int}` |
+| POST | /players/register | `{username: string, email: string, password: string}` | `201` + `{playerId: string, username: string, level: int, xp: int}` |
 | POST | /players/login | `{username: string, password: string}` | `{token: string, playerId: string}` |
 | GET | /players/{id} | — | `{playerId: string, username: string, level: int, xp: int, friends: string[]}` |
 | PATCH | /players/{id}/xp | `{xpGained: int, reason: string}` | `{playerId: string, xp: int, level: int}` |
@@ -175,23 +175,28 @@ This has a few direct consequences for how the system behaves:
 >Notes for callers:
 >- `POST /players/login` returns `401 UNAUTHORIZED` for an unknown username or wrong password.
 >- A duplicate username on `POST /players/register` returns `409 CONFLICT`; unknown IDs return `404 NOT_FOUND`.
+>- Missing register fields, or a non-numeric `xpGained`, return `422 VALIDATION_FAILED`.
+>- Level is `1 + floor(xp / 100)`.
 >- Errors come back as `{error: {code: string, message: string}}`.
  
 #### Server Moderation Session Service
 | Method | Path | Request | Response |
 |---|---|---|---|
-| POST | /sessions | `{moderatorId: string, juniorIds: string[]}` | `{sessionId: string, status: string}` |
-| POST | /sessions/{id}/join | `{playerId: string, role: string}` | `{sessionId: string, role: string, status: string}` |
+| POST | /sessions | `{moderatorId: string, juniorIds?: string[]}` | `201` + `{sessionId: string, status: string}` |
+| POST | /sessions/{id}/join | `{playerId: string, role: "moderator" \| "junior"}` | `{sessionId: string, role: string, status: string}` |
 | GET | /sessions/{id} | — | `{sessionId: string, currentApplicantId: string, processedCount: int, score: int, status: string}` |
 | POST | /sessions/{id}/end | — | `{sessionId: string, result: string, score: int}` |
-| POST | /sessions/{id}/process-applicant | — | `{sessionId: string, processedCount: int, currentApplicantId: string, applicant: object, credentialCheck: object, rulesCheck: object, universityRecords: object}` |
+| POST | /sessions/{id}/process-applicant | — | `{sessionId: string, processedCount: int, currentApplicantId: string, applicant: object, credentialCheck: object, rulesCheck: object, universityRecords: object, sources: {applicant, credentialCheck, rulesCheck, universityRecords: "live" \| "mock"}}` |
 | GET | /status | — | `{status: string, database: string}` — `503` with `status: "degraded"` and `database: "down"` when PostgreSQL is unreachable |
 | DELETE | /sessions/{id} | — | `{sessionId: string, deleted: boolean}` — `404 NOT_FOUND` if unknown |
 
 Notes for callers:
 
 - `POST /sessions/{id}/end` awards XP to every participant through Player Service's `PATCH /players/{id}/xp` (currently 10 XP per processed applicant, a placeholder until Moderation Service scoring is integrated). Ending is one-time: a second call returns `409 CONFLICT`, so XP is never awarded twice.
-- A duplicate `POST /sessions/{id}/join` for the same player returns `409 CONFLICT`.
+- `POST /sessions/{id}/join` returns `409 CONFLICT` when the player is already in the session, when a second moderator tries to join, or when the session has ended. An unknown `role` is `422`.
+- `POST /sessions/{id}/process-applicant` on an ended session returns `409 CONFLICT`.
+- `process-applicant` generates an applicant through Applicant Service, creates its credential with `POST /credentials/{applicantId}` (reading it with `GET` if it already exists), evaluates rules with `POST /rules/evaluate` sending the full applicant, and reads records with `GET /records/{applicantId}?requestingPlayerId=<moderatorId>`.
+- Missing or invalid fields return `422 VALIDATION_FAILED`.
 - Errors come back as `{error: {code: string, message: string}}`.
  
 #### Applicant Service
@@ -224,7 +229,7 @@ Notes for callers (Applicant Service, Credential Service):
 - `core` in `POST /credentials/{applicantId}` is optional. When it is absent, Credential Service fetches the applicant from Applicant Service and answers `404` if that applicant does not exist; it never invents a person.
 - `PATCH` never accepts `applicantId` or `studentId`. They are the shared key across Applicant, Credential and University Record, so they are immutable after creation and sending either is `422`.
 - `DELETE` is local to the service. It does not cascade to the other two services in Lab 1.
-- Errors come back as `{error: {code: string, message: string, details?: object[]}}`, with codes `NOT_FOUND`, `CONFLICT`, `VALIDATION_FAILED`, `INTERNAL_ERROR` and statuses `201` create, `404` unknown id, `409` duplicate id, `422` validation, `500` internal. Discord DMs Service publishes `{error: string}` instead, so the team still has to agree on one shape; this documents what these two services return today rather than deciding it here.
+- Errors come back as `{error: {code: string, message: string, details?: object[]}}`, with codes `NOT_FOUND`, `CONFLICT`, `VALIDATION_FAILED`, `INTERNAL_ERROR` and statuses `201` create, `404` unknown id, `409` duplicate id, `422` validation, `500` internal. Every service in this contract uses the same `{error: {code: string, message: string}}` envelope, and every service uses `422` for validation failures.
  
 #### Server Rules Service
 
@@ -464,7 +469,7 @@ Lab-based versioning: `v{lab}.{iteration}.{patch}`
 - **PR approvals required:** 1 team member minimum
 ### Test Coverage
  
-No code exists yet as of Lab 0, so no coverage threshold is enforced at this stage. Once implementation starts in Lab 1, each service is expected to have unit tests for its core business logic (e.g. rule evaluation in Server Rules Service, decision logic in Moderation Service), with a minimum coverage target to be agreed on and documented once the first service is implemented.
+No coverage threshold is enforced yet. Each service's behaviour is currently verified through its Postman collection in `postman/`. When unit tests are added, they should cover each service's core business logic first (e.g. rule evaluation in Server Rules Service, decision logic in Moderation Service), and the team will agree on and document a minimum coverage target here.
  
 ### Conventional Commits
  
@@ -518,8 +523,8 @@ Each service is pushed to Docker Hub as a versioned, public image — no Dockerf
 
 | Service | Docker Hub Image | Port | Run Requirements |
 |---|---|---|---|
-| Player Service | [`mihaela5/player-service:0.4.0`](https://hub.docker.com/r/mihaela5/player-service) | 3001 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` |
-| Server Moderation Session Service | [`mihaela5/session-service:0.5.0`](https://hub.docker.com/r/mihaela5/session-service) | 3002 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `PLAYER_SERVICE_URL` (shift XP is sent there on `end`), `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` — if unset, falls back to mocked responses for those dependencies |
+| Player Service | [`mihaela5/player-service:0.5.0`](https://hub.docker.com/r/mihaela5/player-service) | 3001 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` |
+| Server Moderation Session Service | [`mihaela5/session-service:0.6.0`](https://hub.docker.com/r/mihaela5/session-service) | 3002 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `PLAYER_SERVICE_URL` (shift XP is sent there on `end`), `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` — if unset, falls back to mocked responses for those dependencies |
 | Applicant Service | [`ciprik13/applicant-service:0.4.0`](https://hub.docker.com/r/ciprik13/applicant-service) | 3003 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `STORE_DRIVER` (`mongo` by default, `memory` runs without a database), `DECEPTIVE_RATE` (share of deceptive applicants, `0.35` by default), `UNIVERSITY_RECORD_SERVICE_URL` (if unset, University Record is mocked) and `HTTP_TIMEOUT_MS` (`2000` by default) |
 | Credential Service | [`ciprik13/credential-service:0.4.0`](https://hub.docker.com/r/ciprik13/credential-service) | 3004 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `CREDENTIAL_SIGNING_SECRET` (HMAC secret for credential authenticity — without it the service falls back to a development secret and credentials issued elsewhere are reported as `FORGED_SIGNATURE`); optionally `STORE_DRIVER` (`mongo` by default, `memory` runs without a database), `APPLICANT_SERVICE_URL` (if unset, Applicant Service is mocked) and `HTTP_TIMEOUT_MS` (`2000` by default) |
 | Server Rules Service | [`ion190/server-rules-service:0.3.0`](https://hub.docker.com/r/ion190/server-rules-service) | 3005 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `UNIVERSITY_RECORD_SERVICE_URL` — if unset or if University Record Service is unreachable, Server Rules Service falls back to its built-in mock university records |
@@ -529,7 +534,7 @@ Each service is pushed to Docker Hub as a versioned, public image — no Dockerf
 
 Pull an image directly, e.g.:
 ```bash
-docker pull mihaela5/player-service:0.4.0
+docker pull mihaela5/player-service:0.5.0
 ```
 
 **Note:** these are the variables the container itself reads. If you're running the full system via the shared `docker-compose.yml` at the repo root, its `.env` file uses service-prefixed names instead (e.g. `PLAYER_DB_USER`) to avoid collisions across all 8 services sharing one file — see that file for the exact mapping.
