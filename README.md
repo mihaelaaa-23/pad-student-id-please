@@ -513,9 +513,10 @@ main (protected — reflects last completed lab)
  
 Lab-based versioning: `v{lab}.{iteration}.{patch}`
  
-- Lab completion: `v0.0.0` (this lab), `v1.0.0`, `v2.0.0`, etc.
+- Lab completion: `v0.0.0` (Lab 0), `v1.0.0`, `v2.0.0`, etc.
 - Feature iterations: `v1.1.0`, `v1.2.0`
 - Bug fixes: `v1.0.1`, `v1.0.2`
+- Docker images: tagged with the lab they belong to. During a lab, images pushed by hand use a pre-release tag (`2.0.0-rc.1`, `2.0.0-rc.2`, …) plus `latest`. The final `2.0.0` (and `latest`) is published only by CI, once, when `dev` is merged into `main` at lab completion — so a version tag always points to exactly one build and is never overwritten. If `dev` is promoted to `main` again (e.g. after evaluation fixes), the repo's version is bumped first (`2.0.1`, `2.0.2`, …), and the CI workflow fails instead of publishing a tag that already exists on Docker Hub.
 ### Lab Completion Process
  
 - All feature branches for a lab merge into `dev` first
