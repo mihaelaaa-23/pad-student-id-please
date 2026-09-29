@@ -182,6 +182,45 @@ This has a few direct consequences for how the system behaves:
  
 ### Endpoints
  
+#### Gateway
+
+The single entry point of the system (Lab 2). Clients call `http://localhost:3000/<prefix>/<service path>`; the Gateway strips the prefix, forwards the request to the service that owns it, and returns that service's status and body unchanged. Response headers pass through too, except hop-by-hop headers and `Content-Length`, `Content-Encoding`, `Date` and `Server`, which the Gateway sets itself; it also adds `X-Request-Id`.
+
+| Prefix | Service | Upstream in docker-compose (env var) |
+|---|---|---|
+| `/player` | Player Service | `http://player-service:3001` (`PLAYER_SERVICE_URL`) |
+| `/session` | Server Moderation Session Service | `http://session-service:3002` (`SESSION_SERVICE_URL`) |
+| `/applicant` | Applicant Service | `http://applicant-service:3003` (`APPLICANT_SERVICE_URL`) |
+| `/credential` | Credential Service | `http://credential-service:3004` (`CREDENTIAL_SERVICE_URL`) |
+| `/server-rules` | Server Rules Service | `http://server-rules-service:3005` (`RULES_SERVICE_URL`) |
+| `/university-record` | University Record Service | `http://university-record-service:3006` (`UNIVERSITY_RECORD_SERVICE_URL`) |
+| `/moderation` | Moderation Service | `http://moderation-service:3007` (`MODERATION_SERVICE_URL`) |
+| `/discord-dms` | Discord DMs Service | `http://discord-dms-service:3008` (`DISCORD_DMS_SERVICE_URL`) |
+
+| Method | Path | Request | Response |
+|---|---|---|---|
+| GET | /status | — | `{service: "gateway", status: string, time: string}` |
+| any | /{prefix}/{service path} | forwarded unchanged | the service's response, unchanged |
+
+Notes for callers:
+
+- Example: `GET /applicant/applicants/42` is forwarded as `GET /applicants/42` to Applicant Service. `GET /status` is the Gateway's own; a service's status is `/<prefix>/status`.
+- `Authorization` is never forwarded to a service. Client-sent `X-Player-Id`, `X-Caller-*`, `Forwarded` and `X-Forwarded-*` headers are removed — only the Gateway sets them (`X-Player-Id` / `X-Caller-*` after authorization), so services can trust them.
+- Every forwarded request carries `X-Request-Id` (kept if the client sent one, otherwise generated, and returned in the response), plus `X-Forwarded-Prefix` and `X-Forwarded-For`.
+- The Gateway waits `UPSTREAM_TIMEOUT_MS` (default `10000`) for a service before giving up.
+- Errors produced by the Gateway itself use the shared envelope:
+
+  | Status | Code | When |
+  |---|---|---|
+  | `404` | `ROUTE_NOT_FOUND` | the first path segment is not a known prefix |
+  | `502` | `BAD_GATEWAY` | the service is unreachable |
+  | `504` | `GATEWAY_TIMEOUT` | the service did not answer within `UPSTREAM_TIMEOUT_MS` |
+
+  Errors produced by a service (e.g. its `404 NOT_FOUND` for a missing resource) pass through unchanged, so `ROUTE_NOT_FOUND` always means a wrong prefix, never a missing resource.
+
+  Besides these, the Gateway answers `404 NOT_FOUND` for a path with no service prefix at all (e.g. `GET /`) and `500 INTERNAL_ERROR` for an unexpected error of its own.
+- The Discord DMs WebSocket is not proxied: clients connect to it directly after negotiating with the Gateway (documented separately).
+
 #### Player Service
 | Method | Path | Request | Response |
 |---|---|---|---|
