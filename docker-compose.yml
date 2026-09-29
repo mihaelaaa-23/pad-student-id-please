@@ -1,8 +1,7 @@
 services:
   # ==================== Gateway (Mihaela) ====================
-  # The single entry point. No depends_on on purpose: services will call each other
-  # through the Gateway (grade 6), so a dependency here would create a cycle.
-  # A service that is not up yet is answered with 502 BAD_GATEWAY.
+  # The single entry point. No depends_on: the Gateway starts independently and
+  # answers 502 BAD_GATEWAY until a service is up.
   gateway:
     image: mihaela5/gateway:2.0.0-rc.1
     restart: unless-stopped
