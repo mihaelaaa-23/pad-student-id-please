@@ -29,6 +29,8 @@ A Discord-server-moderation game: applicants (students, professors, alumni, outs
 | [Ion Iamandii](https://github.com/ion190) | FAF-233 | Server Rules Service | University Record Service |
 | [Liviu Chirtoaca](https://github.com/D3adeYe69) | FAF-233 | Moderation Service | Discord DMs Service |
 
+The **Gateway** (added in Lab 2) is owned by [Mihaela Untu](https://github.com/mihaelaaa-23).
+
 
 ## Service Boundaries
 
@@ -97,6 +99,14 @@ Provides real-time communication between the Moderator and Junior Moderators dur
 
 It transports messages but does **not** determine whether the information shared is correct, and it does not own any applicant, credential, or rule data itself — it's purely the communication layer.
 
+### Gateway
+
+The single entry point of the system, added in Lab 2. Every REST request — from the client and between services — goes through the Gateway, which forwards it to the service that owns the resource. It also owns the concerns that belong at the edge: validating the `Authorization` header (and not forwarding it downstream), negotiating WebSocket connections by giving the client a URL to connect to Discord DMs Service directly, and enforcing its own task timeout and concurrent task limit.
+
+**Database:** none. The Gateway is stateless and holds no business data.
+
+It does **not** own any player, session, applicant, credential, rule, record, decision, or message data, and it does not make business decisions (admission, rule evaluation, scoring) — those stay with the services behind it. It also does not carry WebSocket traffic: once a connection is negotiated, the client talks to Discord DMs Service directly.
+
 ## Architecture Diagram
 
 ![Architecture](./docs/architecture.png)
@@ -120,7 +130,7 @@ Player Service sits at the edge of this graph — it only receives shift outcome
 
 ## Tech Stack & Communication Patterns
 
-> Languages used by the team: **Node.js** + **Go**. Note: Python is our team's "banned language" (a language known by everyone on the team, excluded from use in any private microservice per the assignment rules), so it is not used in any service below.
+> Languages used by the team: **Node.js** + **Go** for the 8 services, and **Python** for the Gateway. Python is our team's "banned language" (a language known by everyone on the team), so it is excluded from all 8 private microservices per the assignment rules. Lab 2 requires the Gateway to be written in the banned language, which makes it the one Python service.
 
 **Node.js**
 
@@ -129,6 +139,10 @@ Used for Player Service, Server Moderation Session Service, Applicant Service, C
 **Go**
 
 Used for Moderation Service and Discord DMs Service. Moderation Service calls four other services per decision and must stay responsive under concurrent sessions — goroutines handle that fan-out cheaply. Discord DMs Service keeps many per-channel WebSocket connections open per shift; Go's goroutine-per-connection model is built for exactly that.
+
+**Python**
+
+Used only for the Gateway, as Lab 2 requires. Its framework and libraries are documented in the Gateway's own README.
 
 **Databases**
 
@@ -144,6 +158,8 @@ Following the database-per-service rule below, each service picked PostgreSQL or
 | Credential Service | MongoDB | Credential documents vary by type |
 | Server Rules Service | MongoDB | Arbitrarily nested rule conditions |
 | Discord DMs Service | MongoDB | High-write, document-shaped chat messages |
+
+The Gateway has no database (see its Service Boundaries entry).
 
 ## Communication Contract
  
@@ -517,6 +533,7 @@ We use the [Conventional Commits](https://www.conventionalcommits.org/) specific
 | University Record Service | https://github.com/ion190/university-record-service | `services/university-record-service` |
 | Moderation Service | https://github.com/D3adeYe69/Moderation-Service | `services/moderation-service` |
 | Discord DMs Service | https://github.com/D3adeYe69/Discord-DMs-Service | `services/discord-dms-service` |
+| Gateway | https://github.com/mihaelaaa-23/gateway | `services/gateway` |
 
 ## Docker Images
 
