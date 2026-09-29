@@ -243,7 +243,7 @@
             "exec": [
               "const json = pm.response.json();",
               "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
-              "pm.test('updates average grade', function () { pm.expect(Number(json.average_grade)).to.eql(9.75); });",
+              "pm.test('updates average grade', function () { pm.expect(Number(json.averageGrade)).to.eql(9.75); });",
               "pm.test('keeps applicant id', function () { pm.expect(json.applicantId).to.eql('postman-applicant-001'); });"
             ]
           }
