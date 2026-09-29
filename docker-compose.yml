@@ -1,4 +1,25 @@
 services:
+  # ==================== Gateway (Mihaela) ====================
+  # The single entry point. No depends_on on purpose: services will call each other
+  # through the Gateway (grade 6), so a dependency here would create a cycle.
+  # A service that is not up yet is answered with 502 BAD_GATEWAY.
+  gateway:
+    image: mihaela5/gateway:2.0.0-rc.1
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      PLAYER_SERVICE_URL: http://player-service:3001
+      SESSION_SERVICE_URL: http://session-service:3002
+      APPLICANT_SERVICE_URL: http://applicant-service:3003
+      CREDENTIAL_SERVICE_URL: http://credential-service:3004
+      RULES_SERVICE_URL: http://server-rules-service:3005
+      UNIVERSITY_RECORD_SERVICE_URL: http://university-record-service:3006
+      MODERATION_SERVICE_URL: http://moderation-service:3007
+      DISCORD_DMS_SERVICE_URL: http://discord-dms-service:3008
+      UPSTREAM_TIMEOUT_MS: ${GATEWAY_UPSTREAM_TIMEOUT_MS:-10000}
+
   # ==================== Player Service (Mihaela) ====================
   player-service:
     image: mihaela5/player-service:0.5.0
