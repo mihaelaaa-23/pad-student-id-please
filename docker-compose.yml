@@ -92,7 +92,7 @@ services:
 
   # ==================== Applicant Service (Ciprian) ====================
   applicant-service:
-    image: ciprik13/applicant-service:0.4.0
+    image: ciprik13/applicant-service:2.0.0-rc.1
     restart: unless-stopped
     ports:
       - "3003:3003"
@@ -105,7 +105,8 @@ services:
       DB_USER: ${APPLICANT_DB_USER}
       DB_PASSWORD: ${APPLICANT_DB_PASSWORD}
       DB_NAME: ${APPLICANT_DB_NAME}
-      UNIVERSITY_RECORD_SERVICE_URL: http://university-record-service:3006
+      # Through the Gateway, like every service-to-service call (Lab 2, grade 6).
+      UNIVERSITY_RECORD_SERVICE_URL: http://gateway:3000/university-record
     depends_on:
       applicant-db:
         condition: service_healthy
@@ -128,7 +129,7 @@ services:
 
   # ==================== Credential Service (Ciprian) ====================
   credential-service:
-    image: ciprik13/credential-service:0.4.0
+    image: ciprik13/credential-service:2.0.0-rc.1
     restart: unless-stopped
     ports:
       - "3004:3004"
@@ -136,9 +137,10 @@ services:
       PORT: 3004
       STORE_DRIVER: mongo
       CREDENTIAL_SIGNING_SECRET: ${CREDENTIAL_SIGNING_SECRET}
-      # Reached over the compose network, by service name. Unset would mean the
-      # client answers from its mock even though the real service is running here.
-      APPLICANT_SERVICE_URL: http://applicant-service:3003
+      # Through the Gateway, like every service-to-service call (Lab 2, grade 6).
+      # Unset would mean the client answers from its mock even though the real
+      # service is running here.
+      APPLICANT_SERVICE_URL: http://gateway:3000/applicant
       DB_HOST: credential-db
       DB_PORT: 27017
       DB_USER: ${CREDENTIAL_DB_USER}
