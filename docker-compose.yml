@@ -111,6 +111,9 @@ services:
       # Lab 2, grade 8: per-request task timeout (504 TASK_TIMEOUT) and concurrent
       # task limit (503 CONCURRENCY_LIMIT_REACHED). Test hooks stay off unless a
       # demo of the 503/504 turns them on through .env.
+      # Timeout budget (README, Gateway notes): outgoing 2500 > University Record's 2000,
+      # own task 3000 > outgoing 2500, and below Credential's 3500 for this service.
+      HTTP_TIMEOUT_MS: ${APPLICANT_HTTP_TIMEOUT_MS:-2500}
       TASK_TIMEOUT_MS: ${APPLICANT_TASK_TIMEOUT_MS:-3000}
       MAX_CONCURRENT_TASKS: ${APPLICANT_MAX_CONCURRENT_TASKS:-50}
       ENABLE_TEST_HOOKS: ${ENABLE_TEST_HOOKS:-false}
@@ -156,7 +159,10 @@ services:
       # Lab 2, grade 8: per-request task timeout (504 TASK_TIMEOUT) and concurrent
       # task limit (503 CONCURRENCY_LIMIT_REACHED). Test hooks stay off unless a
       # demo of the 503/504 turns them on through .env.
-      TASK_TIMEOUT_MS: ${CREDENTIAL_TASK_TIMEOUT_MS:-3000}
+      # Timeout budget (README, Gateway notes): outgoing 3500 > Applicant's 3000,
+      # own task 4000 > outgoing 3500, and below Session's 4500 for this service.
+      HTTP_TIMEOUT_MS: ${CREDENTIAL_HTTP_TIMEOUT_MS:-3500}
+      TASK_TIMEOUT_MS: ${CREDENTIAL_TASK_TIMEOUT_MS:-4000}
       MAX_CONCURRENT_TASKS: ${CREDENTIAL_MAX_CONCURRENT_TASKS:-50}
       ENABLE_TEST_HOOKS: ${ENABLE_TEST_HOOKS:-false}
     depends_on:
