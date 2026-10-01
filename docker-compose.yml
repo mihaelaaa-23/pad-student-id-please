@@ -54,7 +54,7 @@ services:
 
   # ==================== Server Moderation Session Service (Mihaela) ====================
   session-service:
-    image: mihaela5/session-service:0.6.0
+    image: mihaela5/session-service:2.0.0-rc.1
     restart: unless-stopped
     ports:
       - "3002:3002"
@@ -65,11 +65,12 @@ services:
       DB_USER: ${SESSION_DB_USER}
       DB_PASSWORD: ${SESSION_DB_PASSWORD}
       DB_NAME: ${SESSION_DB_NAME}
-      PLAYER_SERVICE_URL: http://player-service:3001
-      APPLICANT_SERVICE_URL: http://applicant-service:3003
-      CREDENTIAL_SERVICE_URL: http://credential-service:3004
-      RULES_SERVICE_URL: http://server-rules-service:3005
-      UNIVERSITY_RECORD_SERVICE_URL: http://university-record-service:3006
+      # Through the Gateway, like every service-to-service call (Lab 2, grade 6).
+      PLAYER_SERVICE_URL: http://gateway:3000/player
+      APPLICANT_SERVICE_URL: http://gateway:3000/applicant
+      CREDENTIAL_SERVICE_URL: http://gateway:3000/credential
+      RULES_SERVICE_URL: http://gateway:3000/server-rules
+      UNIVERSITY_RECORD_SERVICE_URL: http://gateway:3000/university-record
     depends_on:
       session-db:
         condition: service_healthy
