@@ -228,9 +228,12 @@ Notes for callers:
   |---|---|---|
   | `404` | `ROUTE_NOT_FOUND` | the first path segment is not a known prefix |
   | `502` | `BAD_GATEWAY` | the service is unreachable |
+  | `503` | `CONCURRENCY_LIMIT_REACHED` | `MAX_CONCURRENT_TASKS` requests are already in progress; sent with `Retry-After: 1`, the request is not forwarded |
   | `504` | `GATEWAY_TIMEOUT` | the service did not answer within `UPSTREAM_TIMEOUT_MS` |
 
   Errors produced by a service (e.g. its `404 NOT_FOUND` for a missing resource) pass through unchanged, so `ROUTE_NOT_FOUND` always means a wrong prefix, never a missing resource.
+
+  Concurrent task limit (Lab 2, grade 8): every forwarded request holds one slot until the service has answered, and that includes service-to-service calls, which also go through the Gateway. One client request therefore holds several slots at once: one per hop in progress, nested hops included. During `process-applicant` that peaks at about 7 (Session's own request plus Credential → Applicant → University Record and Server Rules → University Record, each hop holding its own slot), about 8 when the request comes in through Discord DMs. So the Gateway's limit must be far above a single service's `MAX_CONCURRENT_TASKS` (`50`), or the outer requests would fill the slots and the inner calls of the same requests would be refused. The variable is `MAX_CONCURRENT_TASKS` in the Gateway image (default `500`), set in compose from `GATEWAY_MAX_CONCURRENT_TASKS`, next to `GATEWAY_UPSTREAM_TIMEOUT_MS`. Rule: Gateway limit ≥ a service's limit × the hops one client request holds at once, with margin; here 50 × 8 = 400 < 500. `/status` is exempt, so the healthcheck keeps answering under load. The Gateway has no task timeout of its own: `UPSTREAM_TIMEOUT_MS` already bounds every forwarded request. A `503 CONCURRENCY_LIMIT_REACHED` from the Gateway and one from a service mean the same thing for a caller (overloaded, retry later or fall back to a mock), so they share the code. A Gateway `503` on an inner hop reaches the calling service as an ordinary `5xx`, so that service falls back to a mock; it is not a `DEPENDENCY_REFUSED`.
 
   Besides these, the Gateway answers `404 NOT_FOUND` for a path with no service prefix at all (e.g. `GET /`) and `500 INTERNAL_ERROR` for an unexpected error of its own.
 - The Discord DMs WebSocket is not proxied: clients connect to it directly after negotiating with the Gateway (documented separately).
