@@ -256,6 +256,9 @@ Notes for callers:
 - `POST /sessions/{id}/join` returns `409 CONFLICT` when the player is already in the session, when a second moderator tries to join, or when the session has ended. An unknown `role` is `422`.
 - `POST /sessions/{id}/process-applicant` on an ended session returns `409 CONFLICT`.
 - `process-applicant` generates an applicant through Applicant Service, creates its credential with `POST /credentials/{applicantId}` (reading it with `GET` if it already exists), evaluates rules with `POST /rules/evaluate` sending the full applicant, and reads records with `GET /records/{applicantId}?requestingPlayerId=<moderatorId>`.
+- In the shared stack these calls go through the Gateway. `sources` reports, per dependency, `live` for a real answer — including University Record's `404 NOT_FOUND`, returned as `{applicantId, fields: {}}` (no record for this applicant) — and `mock` when Session fell back to a mock (dependency unreachable, timed out, `502 BAD_GATEWAY`, `504 GATEWAY_TIMEOUT`, other `5xx`) or when the dependency marked its own answer with `X-Data-Source: mock`.
+- A refused request — `404 ROUTE_NOT_FOUND` (wrong Gateway prefix), `401`, `403`, `422`, or a `DEPENDENCY_REFUSED` error from the dependency — is a configuration error, not an outage: `process-applicant` answers `502` with code `DEPENDENCY_REFUSED` and a message naming the dependency, nothing is stored and `processedCount` does not change. On `end`, a refused XP update is logged; the request still succeeds because the shift has already ended.
+- Session decides on the error `code`, not only the status: `502 BAD_GATEWAY` is the Gateway saying a service is unreachable (→ mock), `502 DEPENDENCY_REFUSED` is a service refusing on purpose (→ no mock).
 - Missing or invalid fields return `422 VALIDATION_FAILED`.
 - Errors come back as `{error: {code: string, message: string}}`.
  
