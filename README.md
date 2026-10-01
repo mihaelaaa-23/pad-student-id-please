@@ -208,6 +208,20 @@ Notes for callers:
 - `Authorization` is never forwarded to a service. Client-sent `X-Player-Id`, `X-Caller-*`, `Forwarded` and `X-Forwarded-*` headers are removed — only the Gateway sets them (`X-Player-Id` / `X-Caller-*` after authorization), so services can trust them.
 - Every forwarded request carries `X-Request-Id` (kept if the client sent one, otherwise generated, and returned in the response), plus `X-Forwarded-Prefix` and `X-Forwarded-For`.
 - The Gateway waits `UPSTREAM_TIMEOUT_MS` (default `10000`) for a service before giving up.
+- Timeout budget of the shared stack (Lab 2, grade 8). A caller must never give up on work the callee is still doing, so on every hop the caller's outgoing call timeout is larger than the callee's `TASK_TIMEOUT_MS`, and a service's own `TASK_TIMEOUT_MS` is larger than its outgoing call timeout. Values are what `docker-compose.yml` sets; an image run without them falls back to its own defaults.
+
+  | Service | Outgoing call timeout | `TASK_TIMEOUT_MS` |
+  |---|---|---|
+  | Player, University Record (leaves) | — | `2000` |
+  | Server Rules | `2500` (to University Record) | `3000` |
+  | Applicant | `2500` (to University Record) | `3000` |
+  | Credential | `3500` (to Applicant) | `4000` |
+  | Server Moderation Session | `4500` per call | `8000` |
+  | Moderation (proposed) | `4500` per call | `8000` |
+  | Discord DMs, REST (proposed) | `8500` (to Session) | `9000` |
+  | Gateway | `10000` (`UPSTREAM_TIMEOUT_MS`) | — |
+
+  `TASK_TIMEOUT_MS` is a cap, not a sum: Session and Moderation make several calls per request, so two slow dependencies can use up `8000` and the service answers `504 TASK_TIMEOUT` itself. The Gateway's `10000` stays above every service's cap, so a client sees the service's own `504 TASK_TIMEOUT` rather than `504 GATEWAY_TIMEOUT`. Services that do not implement grade 8 yet adopt their row when they do.
 - Errors produced by the Gateway itself use the shared envelope:
 
   | Status | Code | When |
@@ -300,8 +314,9 @@ Notes for callers (Applicant Service, Credential Service):
   - University Record is unreachable, times out or answers any other `5xx` (including the Gateway's `502 BAD_GATEWAY`) → `200` built from a mock, with header `X-Data-Source: mock`, and **not stored**
 - `POST /credentials/{applicantId}` without `core` asks Applicant Service with the same rules: `404` if the applicant does not exist, `502 DEPENDENCY_REFUSED` if the lookup is refused (including Applicant Service's own `502 DEPENDENCY_REFUSED`), and a mock holder if Applicant Service is down or itself answered `X-Data-Source: mock`. A credential issued for a mock holder is stored, but the `201` carries `X-Data-Source: mock`.
 - `502 DEPENDENCY_REFUSED` and the Gateway's `502 BAD_GATEWAY` share the status but not the meaning: `DEPENDENCY_REFUSED` is a configuration error further down the chain (do not mock, surface it), `BAD_GATEWAY` means the service is unreachable (a mock fallback is fine). Callers must decide by `error.code`, not by status.
+- Every route except `/health` and `/status` runs under a task timeout and a concurrent task limit (Lab 2, grade 8). A request still running after `TASK_TIMEOUT_MS` (in the shared stack `3000` for Applicant and `4000` for Credential, see the timeout budget; `3000` in the image if unset) is answered `504 TASK_TIMEOUT` and its outgoing calls are cancelled; outgoing calls give up after `HTTP_TIMEOUT_MS` (in the stack `2500` for Applicant → University Record and `3500` for Credential → Applicant; `2000` in the image if unset); a request arriving while `MAX_CONCURRENT_TASKS` (`50`, in the stack and in the image) are already running is answered `503 CONCURRENCY_LIMIT_REACHED` with `Retry-After: 1`, without being processed. Both mean the service is overloaded or slow, not that the request is wrong: a caller may retry later or fall back to a mock, like for any other `5xx`. `504 TASK_TIMEOUT` (the service gave up on its own work) is different from the Gateway's `504 GATEWAY_TIMEOUT` (the service did not answer in time).
 - `X-Data-Source: mock` is the only signal that a response contains invented data; callers that must not act on invented data (Session, Moderation) can check it. It is absent on every normal response.
-- Errors come back as `{error: {code: string, message: string, details?: object[]}}`, with codes `NOT_FOUND`, `CONFLICT`, `VALIDATION_FAILED`, `DEPENDENCY_REFUSED`, `INTERNAL_ERROR` and statuses `201` create, `404` unknown id, `409` duplicate id, `422` validation, `502` refused dependency lookup, `500` internal. Every service in this contract uses the same `{error: {code: string, message: string}}` envelope, and every service uses `422` for validation failures.
+- Errors come back as `{error: {code: string, message: string, details?: object[]}}`, with codes `NOT_FOUND`, `CONFLICT`, `VALIDATION_FAILED`, `DEPENDENCY_REFUSED`, `CONCURRENCY_LIMIT_REACHED`, `TASK_TIMEOUT`, `INTERNAL_ERROR` and statuses `201` create, `404` unknown id, `409` duplicate id, `422` validation, `502` refused dependency lookup, `503` concurrent task limit reached, `504` task timeout, `500` internal. Every service in this contract uses the same `{error: {code: string, message: string}}` envelope, and every service uses `422` for validation failures.
  
 #### Server Rules Service
 
