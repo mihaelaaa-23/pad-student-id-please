@@ -246,7 +246,7 @@ Notes for callers:
 | POST | /sessions/{id}/join | `{playerId: string, role: "moderator" \| "junior"}` | `{sessionId: string, role: string, status: string}` |
 | GET | /sessions/{id} | — | `{sessionId: string, currentApplicantId: string, processedCount: int, score: int, status: string}` |
 | POST | /sessions/{id}/end | — | `{sessionId: string, result: string, score: int}` |
-| POST | /sessions/{id}/process-applicant | — | `{sessionId: string, processedCount: int, currentApplicantId: string, applicant: object, credentialCheck: object, rulesCheck: object, universityRecords: object, sources: {applicant, credentialCheck, rulesCheck, universityRecords: "live" \| "mock"}}` |
+| POST | /sessions/{id}/process-applicant | — | `{sessionId: string, processedCount: int, currentApplicantId: string, applicant: object, credentialCheck: object, rulesCheck: object, universityRecords: object, sources: {applicant, credentialCheck, rulesCheck, universityRecords: "live" \| "mock"}}` — `502` with `DEPENDENCY_REFUSED` when a dependency refuses the request |
 | GET | /status | — | `{status: string, database: string}` — `503` with `status: "degraded"` and `database: "down"` when PostgreSQL is unreachable |
 | DELETE | /sessions/{id} | — | `{sessionId: string, deleted: boolean}` — `404 NOT_FOUND` if unknown |
 
@@ -256,6 +256,10 @@ Notes for callers:
 - `POST /sessions/{id}/join` returns `409 CONFLICT` when the player is already in the session, when a second moderator tries to join, or when the session has ended. An unknown `role` is `422`.
 - `POST /sessions/{id}/process-applicant` on an ended session returns `409 CONFLICT`.
 - `process-applicant` generates an applicant through Applicant Service, creates its credential with `POST /credentials/{applicantId}` (reading it with `GET` if it already exists), evaluates rules with `POST /rules/evaluate` sending the full applicant, and reads records with `GET /records/{applicantId}?requestingPlayerId=<moderatorId>`.
+- In the shared stack these calls go through the Gateway. `sources` reports, per dependency, `live` for a real answer — including University Record's `404 NOT_FOUND`, returned as `{applicantId, fields: {}}` (no record for this applicant) — and `mock` when Session fell back to a mock (dependency unreachable, timed out, `502 BAD_GATEWAY`, `504 GATEWAY_TIMEOUT`, other `5xx`) or when the dependency marked its own answer with `X-Data-Source: mock`.
+- A refused request — `404 ROUTE_NOT_FOUND` (wrong Gateway prefix), `401`, `403`, `422`, or a `DEPENDENCY_REFUSED` error from the dependency — is a configuration error, not an outage: `process-applicant` answers `502` with code `DEPENDENCY_REFUSED` and a message naming the dependency, nothing is stored and `processedCount` does not change. On `end`, XP updates are not retried: a refused one is logged as an error, and an unreachable, timed-out or failing Player Service (or an unknown player, `404 NOT_FOUND`) is logged as a warning. In both cases that XP is lost and the request still succeeds, because the shift has already ended.
+- Session decides on the error `code`, not only the status: `502 BAD_GATEWAY` is the Gateway saying a service is unreachable (→ mock), `502 DEPENDENCY_REFUSED` is a service refusing on purpose (→ no mock).
+- Session always sends `core` with `POST /credentials/{applicantId}`, so Credential never has to look the applicant up; a `404 NOT_FOUND` there is not expected and would be handled like any other error (mock).
 - Missing or invalid fields return `422 VALIDATION_FAILED`.
 - Errors come back as `{error: {code: string, message: string}}`.
  
