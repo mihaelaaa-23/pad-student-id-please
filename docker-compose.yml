@@ -93,7 +93,7 @@ services:
 
   # ==================== Applicant Service (Ciprian) ====================
   applicant-service:
-    image: ciprik13/applicant-service:2.0.0-rc.1
+    image: ciprik13/applicant-service:2.0.0-rc.3
     restart: unless-stopped
     ports:
       - "3003:3003"
@@ -108,6 +108,12 @@ services:
       DB_NAME: ${APPLICANT_DB_NAME}
       # Through the Gateway, like every service-to-service call (Lab 2, grade 6).
       UNIVERSITY_RECORD_SERVICE_URL: http://gateway:3000/university-record
+      # Lab 2, grade 8: per-request task timeout (504 TASK_TIMEOUT) and concurrent
+      # task limit (503 CONCURRENCY_LIMIT_REACHED). Test hooks stay off unless a
+      # demo of the 503/504 turns them on through .env.
+      TASK_TIMEOUT_MS: ${APPLICANT_TASK_TIMEOUT_MS:-3000}
+      MAX_CONCURRENT_TASKS: ${APPLICANT_MAX_CONCURRENT_TASKS:-50}
+      ENABLE_TEST_HOOKS: ${ENABLE_TEST_HOOKS:-false}
     depends_on:
       applicant-db:
         condition: service_healthy
@@ -130,7 +136,7 @@ services:
 
   # ==================== Credential Service (Ciprian) ====================
   credential-service:
-    image: ciprik13/credential-service:2.0.0-rc.1
+    image: ciprik13/credential-service:2.0.0-rc.3
     restart: unless-stopped
     ports:
       - "3004:3004"
@@ -147,6 +153,12 @@ services:
       DB_USER: ${CREDENTIAL_DB_USER}
       DB_PASSWORD: ${CREDENTIAL_DB_PASSWORD}
       DB_NAME: ${CREDENTIAL_DB_NAME}
+      # Lab 2, grade 8: per-request task timeout (504 TASK_TIMEOUT) and concurrent
+      # task limit (503 CONCURRENCY_LIMIT_REACHED). Test hooks stay off unless a
+      # demo of the 503/504 turns them on through .env.
+      TASK_TIMEOUT_MS: ${CREDENTIAL_TASK_TIMEOUT_MS:-3000}
+      MAX_CONCURRENT_TASKS: ${CREDENTIAL_MAX_CONCURRENT_TASKS:-50}
+      ENABLE_TEST_HOOKS: ${ENABLE_TEST_HOOKS:-false}
     depends_on:
       credential-db:
         condition: service_healthy
