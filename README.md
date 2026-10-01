@@ -289,7 +289,14 @@ Notes for callers (Applicant Service, Credential Service):
 - `core` in `POST /credentials/{applicantId}` is optional. When it is absent, Credential Service fetches the applicant from Applicant Service and answers `404` if that applicant does not exist; it never invents a person.
 - `PATCH` never accepts `applicantId` or `studentId`. They are the shared key across Applicant, Credential and University Record, so they are immutable after creation and sending either is `422`.
 - `DELETE` is local to the service. It does not cascade to the other two services in Lab 1.
-- Errors come back as `{error: {code: string, message: string, details?: object[]}}`, with codes `NOT_FOUND`, `CONFLICT`, `VALIDATION_FAILED`, `INTERNAL_ERROR` and statuses `201` create, `404` unknown id, `409` duplicate id, `422` validation, `500` internal. Every service in this contract uses the same `{error: {code: string, message: string}}` envelope, and every service uses `422` for validation failures.
+- `GET /applicants/{id}` for a UUID that Applicant Service does not hold asks University Record Service for it, as `GET /records/{id}?requestingPlayerId=applicant-service` (the service asks on its own behalf, not a player's; University Record's `program` and `studyYear` become `major` and `year`). The result:
+  - the record exists → the applicant is stored and returned (`200`)
+  - University Record answers `404 NOT_FOUND` → `404`
+  - the lookup is refused (`404 ROUTE_NOT_FOUND` from the Gateway, `401`, `403`, `422`) → `502 BAD_GATEWAY`, because a wrong Gateway prefix or a rejected token is a configuration error that a mock would hide
+  - University Record is unreachable, times out or answers `5xx` → `200` built from a mock, with header `X-Data-Source: mock`, and **not stored**
+- `POST /credentials/{applicantId}` without `core` asks Applicant Service with the same rules: `404` if the applicant does not exist, `502 BAD_GATEWAY` if the lookup is refused, and a mock holder if Applicant Service is down or itself answered `X-Data-Source: mock`. A credential issued for a mock holder is stored, but the `201` carries `X-Data-Source: mock`.
+- `X-Data-Source: mock` is the only signal that a response contains invented data; callers that must not act on invented data (Session, Moderation) can check it. It is absent on every normal response.
+- Errors come back as `{error: {code: string, message: string, details?: object[]}}`, with codes `NOT_FOUND`, `CONFLICT`, `VALIDATION_FAILED`, `BAD_GATEWAY`, `INTERNAL_ERROR` and statuses `201` create, `404` unknown id, `409` duplicate id, `422` validation, `502` refused dependency lookup, `500` internal. Every service in this contract uses the same `{error: {code: string, message: string}}` envelope, and every service uses `422` for validation failures.
  
 #### Server Rules Service
 
