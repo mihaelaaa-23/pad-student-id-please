@@ -10,7 +10,8 @@
     { "key": "sessionId", "value": "shift-001" },
     { "key": "moderatorId", "value": "player-moderator-1" },
     { "key": "juniorId", "value": "player-junior-1" },
-    { "key": "messageId", "value": "" }
+    { "key": "messageId", "value": "" },
+    { "key": "sessionServiceUrl", "value": "http://localhost:3002" }
   ],
   "item": [
     {
@@ -47,6 +48,40 @@
       "name": "Channels",
       "item": [
         {
+          "name": "Create the shift in Server Moderation Session Service",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n    \"moderatorId\": \"{{moderatorId}}\",\n    \"juniorIds\": [\"{{juniorId}}\"]\n}" },
+            "url": {
+              "raw": "{{sessionServiceUrl}}/sessions",
+              "host": ["{{sessionServiceUrl}}"],
+              "path": ["sessions"]
+            },
+            "description": "Creates the shift every request below belongs to. With SESSION_SERVICE_URL set, this service answers 404 for a session Server Moderation Session Service does not know, so the shift has to be a real one. It also gives every run its own session id, so a second run never meets the channels, members and messages the first one left behind."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the shift was created', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "if (pm.response.code === 201) {",
+                  "    pm.collectionVariables.set('sessionId', pm.response.json().sessionId);",
+                  "} else {",
+                  "    // Without a shift every request below would send 'undefined' in its",
+                  "    // path and fail for the wrong reason, hiding what actually went wrong.",
+                  "    pm.execution.setNextRequest(null);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "Create the default channels of a shift",
           "request": {
             "method": "POST",
@@ -59,17 +94,6 @@
             "description": "Creates #enrollment-check, #faculty-check, #course-registration and #general-mod-chat. Safe to run twice: channels that already exist are reported as existing."
           },
           "event": [
-            {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "// Give every run its own shift, so a second run never meets the",
-                  "// channels, members and messages the first one left behind.",
-                  "pm.collectionVariables.set('sessionId', 'shift-' + Date.now());"
-                ]
-              }
-            },
             {
               "listen": "test",
               "script": {
@@ -684,6 +708,33 @@
                 "exec": [
                   "pm.test('the shift is empty again', function () {",
                   "    pm.response.to.have.status(204);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete the shift",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{sessionServiceUrl}}/sessions/{{sessionId}}",
+              "host": ["{{sessionServiceUrl}}"],
+              "path": ["sessions", "{{sessionId}}"]
+            },
+            "description": "Removes the shift this run created, so re-running the collection does not pile up sessions in Server Moderation Session Service."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the shift was deleted', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().deleted).to.be.true;",
                   "});"
                 ]
               }
