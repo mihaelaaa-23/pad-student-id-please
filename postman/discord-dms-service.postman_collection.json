@@ -69,7 +69,13 @@
                   "pm.test('the shift was created', function () {",
                   "    pm.response.to.have.status(201);",
                   "});",
-                  "pm.collectionVariables.set('sessionId', pm.response.json().sessionId);"
+                  "if (pm.response.code === 201) {",
+                  "    pm.collectionVariables.set('sessionId', pm.response.json().sessionId);",
+                  "} else {",
+                  "    // Without a shift every request below would send 'undefined' in its",
+                  "    // path and fail for the wrong reason, hiding what actually went wrong.",
+                  "    pm.execution.setNextRequest(null);",
+                  "}"
                 ]
               }
             }
