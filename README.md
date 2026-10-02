@@ -451,7 +451,7 @@ Notes for callers:
 - Renaming a channel keeps its id, its messages and its access grants. Deleting a channel deletes its messages.
 - `POST /sessions/{id}/members` replaces the player's assignment when called again.
 - Messages come back oldest first. A message posted over HTTP is also sent to every WebSocket listener on the channel, and every message is stored before it is sent.
-- `POST /sessions/{id}/bootstrap` and `POST /sessions/{id}/members` answer `404` when `SESSION_SERVICE_URL` is set and Server Moderation Session Service does not know that session. With it unset the check is skipped, and a Session Service that is unreachable does not block the request.
+- `POST /sessions/{id}/bootstrap`, `POST /sessions/{id}/channels` and `POST /sessions/{id}/members` answer `404` when `SESSION_SERVICE_URL` is set and Server Moderation Session Service does not know that session. With it unset the check is skipped, and a Session Service that is unreachable does not block the request. The check runs after the request body is validated, so a malformed body is still `422`.
 - Errors come back as `{error: {code: string, message: string}}`.
 
 ### Shared Enumerations and Field Formats
