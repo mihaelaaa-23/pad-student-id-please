@@ -386,17 +386,7 @@ A request without `requestingPlayerId` returns HTTP `422` with `{error: {code: "
 Example response:
 
 ```json
-{
-  "id": 1,
-  "applicant_id": "applicant-001",
-  "student_id": "UTM-2026-001",
-  "university": "Technical University of Moldova",
-  "faculty": "Faculty of Computers, Informatics and Microelectronics",
-  "program": "Software Engineering",
-  "study_year": 4,
-  "enrollment_status": "active",
-  "average_grade": 9.25
-}
+{ "applicantId": "applicant-001", "fields": { "studentId": "FCIM-261847", "name": "Ion Popescu", "university": "Technical University of Moldova", "faculty": "FAF", "program": "Software Engineering", "studyYear": 4, "role": "student_faf", "status": "active", "averageGrade": 9.25, "previouslyBanned": false, "isEnrolled": true } }
 ```
 
 The service uses PostgreSQL with a persistent Docker volume.
