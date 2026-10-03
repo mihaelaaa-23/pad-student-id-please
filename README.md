@@ -386,8 +386,33 @@ A request without `requestingPlayerId` returns HTTP `422` with `{error: {code: "
 Example response:
 
 ```json
-{ "applicantId": "applicant-001", "fields": { "studentId": "FCIM-261847", "name": "Ion Popescu", "university": "Technical University of Moldova", "faculty": "FAF", "program": "Software Engineering", "studyYear": 4, "role": "student_faf", "status": "active", "averageGrade": 9.25, "previouslyBanned": false, "isEnrolled": true } }
+{
+  "applicantId": "applicant-001",
+  "fields": {
+    "studentId": "FCIM-261847",
+    "name": "Ion Popescu",
+    "university": "Technical University of Moldova",
+    "faculty": "FAF",
+    "program": "Software Engineering",
+    "studyYear": 4,
+    "role": "student_faf",
+    "status": "active",
+    "averageGrade": 9.25,
+    "previouslyBanned": false,
+    "isEnrolled": true
+  }
+}
 ```
+
+All API response fields use camelCase. Database column names use snake_case internally and are not exposed by the API.
+
+The University Record `fields` object includes:
+
+* `isEnrolled`: boolean indicating whether the person is currently enrolled as a student. This is distinct from `status`, which represents the person's overall university status.
+* `previouslyBanned`: boolean indicating whether the applicant has previously been banned from the moderated Discord server. This is the ban-history value used by Server Rules Service for the `NO_PREVIOUS_BAN` rule.
+
+For a University Record that exists for a non-student, `isEnrolled` is `false`. An applicant with no University Record is still returned as `404 NOT_FOUND`; the service does not invent `false` values for a missing record.
+
 
 The service uses PostgreSQL with a persistent Docker volume.
 
