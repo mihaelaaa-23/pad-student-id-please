@@ -409,12 +409,14 @@ All API response fields use camelCase. Database column names use snake_case inte
 The University Record `fields` object includes:
 
 * `isEnrolled`: boolean indicating whether the person is currently enrolled as a student. This is distinct from `status`, which represents the person's overall university status.
-* `previouslyBanned`: boolean indicating whether the applicant has previously been banned from the moderated Discord server. This is the ban-history value used by Server Rules Service for the `NO_PREVIOUS_BAN` rule.
+* `previouslyBanned`: boolean indicating whether the applicant has previously been banned from the moderated Discord server. This is the same ban-history value used by Server Rules Service for the `NO_PREVIOUS_BAN` rule. The field is always present as a boolean, including for non-student records.
 
-For a University Record that exists for a non-student, `isEnrolled` is `false`. An applicant with no University Record is still returned as `404 NOT_FOUND`; the service does not invent `false` values for a missing record.
+For a University Record that exists for a non-student, `isEnrolled` is `false`. For example, a university staff member can have `status: "active"` while `isEnrolled: false`, because `status` describes overall university status while `isEnrolled` specifically describes current student enrollment.
 
+An applicant with no University Record is still returned as `404 NOT_FOUND`; the service does not invent `false` values for a missing record.
 
 The service uses PostgreSQL with a persistent Docker volume.
+
 
 #### Moderation Service
 | Method | Path | Request | Response |
