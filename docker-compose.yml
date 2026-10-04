@@ -221,7 +221,7 @@ services:
 
   # ==================== University Record Service (Ion) ====================
   university-record-service:
-    image: ion190/university-record-service:2.0.0-rc.3
+    image: ion190/university-record-service:2.0.0-rc.4
     restart: unless-stopped
     ports:
       - "3006:3006"
