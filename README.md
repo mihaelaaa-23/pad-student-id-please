@@ -200,6 +200,7 @@ The single entry point of the system (Lab 2). Clients call `http://localhost:300
 | Method | Path | Request | Response |
 |---|---|---|---|
 | GET | /status | — | `{service: "gateway", status: string, time: string}` |
+| POST | /ws/negotiate | `{sessionId: string, channel: string, playerId: string}` | `{url: string, ticket: string, expiresAt: string}` |
 | any | /{prefix}/{service path} | forwarded unchanged | the service's response, unchanged |
 
 Notes for callers:
@@ -236,7 +237,21 @@ Notes for callers:
   Concurrent task limit (Lab 2, grade 8): every forwarded request holds one slot until the service has answered, and that includes service-to-service calls, which also go through the Gateway. One client request therefore holds several slots at once: one per hop in progress, nested hops included. During `process-applicant` that peaks at about 7 (Session's own request plus Credential → Applicant → University Record and Server Rules → University Record, each hop holding its own slot), about 8 when the request comes in through Discord DMs. So the Gateway's limit must be far above a single service's `MAX_CONCURRENT_TASKS` (`50`), or the outer requests would fill the slots and the inner calls of the same requests would be refused. The variable is `MAX_CONCURRENT_TASKS` in the Gateway image (default `500`), set in compose from `GATEWAY_MAX_CONCURRENT_TASKS`, next to `GATEWAY_UPSTREAM_TIMEOUT_MS`. Rule: Gateway limit ≥ a service's limit × the hops one client request holds at once, with margin; here 50 × 8 = 400 < 500. `/status` is exempt, so the healthcheck keeps answering under load. The Gateway has no task timeout of its own: `UPSTREAM_TIMEOUT_MS` already bounds every forwarded request. A `503 CONCURRENCY_LIMIT_REACHED` from the Gateway and one from a service mean the same thing for a caller (overloaded, retry later or fall back to a mock), so they share the code. A Gateway `503` on an inner hop reaches the calling service as an ordinary `5xx`, so that service falls back to a mock; it is not a `DEPENDENCY_REFUSED`.
 
   Besides these, the Gateway answers `404 NOT_FOUND` for a path with no service prefix at all (e.g. `GET /`) and `500 INTERNAL_ERROR` for an unexpected error of its own.
-- The Discord DMs WebSocket is not proxied: clients connect to it directly after negotiating with the Gateway (documented separately).
+- The Discord DMs WebSocket is not proxied: clients connect to it directly after negotiating with the Gateway. A long-lived socket proxied through the Gateway would hold one of its slots for a whole shift, so the Gateway authorises the connection up front and then steps out of the way.
+
+  **Negotiating a socket.** `POST /ws/negotiate` with `{sessionId, channel, playerId}` answers `{url, ticket, expiresAt}`. The client then opens `<url>?ticket=<ticket>`, which is a direct connection to Discord DMs Service on its published WebSocket port. `url` is the address the *client* can reach, from the Gateway's `DISCORD_DMS_WS_PUBLIC_URL` (in the shared stack `ws://localhost:3008`) — not the in-network name, which a client outside the compose network cannot resolve.
+
+  **The ticket** is `<payload>.<signature>`, both base64url without padding:
+
+  - `payload` is the JSON `{"sessionId": string, "channel": string, "playerId": string, "exp": int}`, where `exp` is a Unix timestamp in seconds, 60 seconds after issue.
+  - `signature` is `HMAC-SHA256(payload, WS_TICKET_SECRET)` over the base64url payload text exactly as it appears in the ticket, so both sides sign the same bytes without re-serialising the JSON.
+  - `WS_TICKET_SECRET` is shared by the Gateway and Discord DMs Service through the environment and is never sent to a client.
+
+  **A ticket is bound to one channel.** Discord DMs rejects it unless `sessionId`, `channel` and `playerId` all match the connection being opened, so a ticket for `#general-mod-chat` cannot open `#faculty-check`. A client opening several channels negotiates once per channel.
+
+  **Discord DMs answers `401 UNAUTHORIZED`** when the ticket is missing, malformed, signed with another secret, expired, or issued for a different session, channel or player. Once the ticket is accepted, the channel-access rules apply unchanged: a player who was never assigned the channel still gets `403 FORBIDDEN`. The ticket says *who you are*; the roster still says *what you may read*.
+
+  **While `WS_TICKET_SECRET` is unset**, Discord DMs keeps accepting `?playerId=` as before and the Gateway answers `503` to `/ws/negotiate`. That is the state before this is rolled out, so the services can ship the support independently of each other.
 
 #### Player Service
 | Method | Path | Request | Response |
@@ -461,12 +476,13 @@ Notes for callers:
 | GET | /sessions/<wbr>{id}/<wbr>channels/<wbr>{channel}/<wbr>messages/<wbr>{messageId} | `?playerId=string` | the message shape |
 | PATCH | /sessions/<wbr>{id}/<wbr>channels/<wbr>{channel}/<wbr>messages/<wbr>{messageId} | `{senderId: string, content: string}` | the message shape |
 | DELETE | /sessions/<wbr>{id}/<wbr>channels/<wbr>{channel}/<wbr>messages/<wbr>{messageId} | `?playerId=string` | — (`204`, no body) |
-| WS | /ws/<wbr>sessions/<wbr>{id}/<wbr>channels/<wbr>{channel} | `?playerId=string`, then `{senderId: string, content: string}` per message | `{senderId: string, content: string, timestamp: string}` to every listener on the channel |
+| WS | /ws/<wbr>sessions/<wbr>{id}/<wbr>channels/<wbr>{channel} | `?ticket=string` (or `?playerId=string` while `WS_TICKET_SECRET` is unset), then `{senderId: string, content: string}` per message | `{senderId: string, content: string, timestamp: string}` to every listener on the channel |
 
 Notes for callers:
 
 - `role` is `moderator` or `junior`. A moderator reaches every channel of the session; a junior moderator needs at least one channel in `channels` and only reaches those.
 - The message endpoints and the WebSocket act on behalf of a player (`playerId`, or `senderId` when posting or editing): `422` when it is missing, `404` when the session has no such channel, `403` when the player was not assigned it.
+- When `WS_TICKET_SECRET` is set, the WebSocket takes its player from the `?ticket=` issued by the Gateway rather than from `?playerId=`, and answers `401 UNAUTHORIZED` for a ticket that is missing, malformed, wrongly signed, expired, or issued for another session, channel or player. See the Gateway's negotiation section for the ticket format.
 - A message is `403` to edit unless `senderId` is its author, and `403` to delete unless the player is its author or the session's moderator.
 - `/status` answers `503` with `status: "degraded"` when MongoDB is unreachable.
 - `POST /sessions/{id}/bootstrap` creates the four default channels and is safe to call twice.
