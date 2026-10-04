@@ -198,7 +198,9 @@ services:
       DB_USER: ${RULES_DB_USER}
       DB_PASSWORD: ${RULES_DB_PASSWORD}
       DB_NAME: ${RULES_DB_NAME}
-      UNIVERSITY_RECORD_SERVICE_URL: http://university-record-service:3006
+      UNIVERSITY_RECORD_SERVICE_URL: http://gateway:3000/university-record
+      TASK_TIMEOUT_MS: 3000
+      MAX_CONCURRENT_TASKS: 50
     depends_on:
       rules-db:
         condition: service_healthy
@@ -232,6 +234,8 @@ services:
       DB_USER: ${UNIVERSITY_RECORD_DB_USER}
       DB_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
       DB_NAME: ${UNIVERSITY_RECORD_DB_NAME}
+      TASK_TIMEOUT_MS: 2000
+      MAX_CONCURRENT_TASKS: 50
     depends_on:
       university-record-db:
         condition: service_healthy
