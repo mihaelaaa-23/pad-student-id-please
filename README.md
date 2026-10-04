@@ -195,7 +195,7 @@ The single entry point of the system (Lab 2). Clients call `http://localhost:300
 | `/server-rules` | Server Rules Service | `http://server-rules-service:3005` (`RULES_SERVICE_URL`) |
 | `/university-record` | University Record Service | `http://university-record-service:3006` (`UNIVERSITY_RECORD_SERVICE_URL`) |
 | `/moderation` | Moderation Service | `http://moderation-service:3007` (`MODERATION_SERVICE_URL`) |
-| `/discord-dms` | Discord DMs Service | `http://discord-dms-service:3008` (`DISCORD_DMS_SERVICE_URL`) |
+| `/discord-dms` | Discord DMs Service | `http://discord-dms-service:3009` (`DISCORD_DMS_SERVICE_URL`) — its REST port; `3008` serves only the WebSocket |
 
 | Method | Path | Request | Response |
 |---|---|---|---|
@@ -434,7 +434,13 @@ Notes for callers:
 - `decision` is `accept`, `reject`, `flag` or `ban`.
 - A second `POST /moderation/decide` for the same applicant in the same session is `409`.
 - `violatedRules` carries the rule ids returned by Server Rules Service, the credential issue codes prefixed with `credential: `, and record findings prefixed with `record: `.
-- Errors come back as `{error: {code: string, message: string}}`.
+- `sources` reports, per dependency, `live` for a real answer and `simulated` when the mock took over. The evidence is gathered through the Gateway, so Moderation decides on the error `code` rather than the status alone:
+  - a refused lookup — `404 ROUTE_NOT_FOUND` (wrong Gateway prefix), `401`, `403`, `422`, or `502 DEPENDENCY_REFUSED` — is a configuration error, not an outage. No mock takes over and the decision is answered `502 DEPENDENCY_REFUSED` without being scored or stored.
+  - a dependency that is unreachable, times out, or answers `502 BAD_GATEWAY`, `504 GATEWAY_TIMEOUT`, `503 CONCURRENCY_LIMIT_REACHED` or any other `5xx` is replaced by the simulated answer, and `sources` says so.
+  - University Record's `404 NOT_FOUND` is a real answer, not a failure: the records are read as `fields: {}`, the source stays `live`, and the rules that need those fields simply do not fire. Nothing is invented for an applicant with no record.
+- `GET /records/{applicantId}` is always asked with a `requestingPlayerId`: the moderator from `decidedBy`, or `moderation-service` when the decision names none.
+- Every outgoing call carries the caller's `X-Request-Id`, so one client request can be followed across the services it touches.
+- Errors come back as `{error: {code: string, message: string}}`, with codes `NOT_FOUND`, `CONFLICT`, `VALIDATION_FAILED`, `DEPENDENCY_REFUSED` and `INTERNAL_ERROR`.
  
 #### Discord DMs Service
 | Method | Path | Request | Response |
@@ -468,7 +474,10 @@ Notes for callers:
 - Renaming a channel keeps its id, its messages and its access grants. Deleting a channel deletes its messages.
 - `POST /sessions/{id}/members` replaces the player's assignment when called again.
 - Messages come back oldest first. A message posted over HTTP is also sent to every WebSocket listener on the channel, and every message is stored before it is sent.
-- `POST /sessions/{id}/bootstrap`, `POST /sessions/{id}/channels` and `POST /sessions/{id}/members` answer `404` when `SESSION_SERVICE_URL` is set and Server Moderation Session Service does not know that session. With it unset the check is skipped, and a Session Service that is unreachable does not block the request. The check runs after the request body is validated, so a malformed body is still `422`.
+- `POST /sessions/{id}/bootstrap`, `POST /sessions/{id}/channels` and `POST /sessions/{id}/members` check the shift against Server Moderation Session Service when `SESSION_SERVICE_URL` is set. The check runs after the request body is validated, so a malformed body is still `422`. With the variable unset the check is skipped entirely.
+- Only Session Service's own `404 NOT_FOUND` means the shift does not exist; the request is then answered `404` with code `NOT_FOUND`. A refused lookup — `404 ROUTE_NOT_FOUND` from the Gateway (wrong prefix), `401`, `403`, `422`, or `502 DEPENDENCY_REFUSED` — is a configuration error, not a missing shift, and is answered `502` with code `DEPENDENCY_REFUSED`.
+- The check is skipped only when Session Service is unreachable: a network error, a timeout, `502 BAD_GATEWAY`, `504 GATEWAY_TIMEOUT` or any other `5xx`, including the Gateway's `503 CONCURRENCY_LIMIT_REACHED`. Losing the chat because another service is down would be worse than trusting the caller for one shift.
+- The service listens on two ports: `WS_PORT` (`3008`) serves `/ws/...` alone and is the only one published, because a client connects to the socket directly after negotiating with the Gateway; `HTTP_PORT` (`3009`) serves every REST endpoint and `/status` and stays inside the network, so REST can only arrive through the Gateway. Anything that is not the socket on the WebSocket port answers `404` in the shared error envelope.
 - Errors come back as `{error: {code: string, message: string}}`.
 
 ### Shared Enumerations and Field Formats
@@ -639,8 +648,8 @@ Each service is pushed to Docker Hub as a versioned, public image — no Dockerf
 | Credential Service | [`ciprik13/credential-service:2.0.0-rc.3`](https://hub.docker.com/r/ciprik13/credential-service) | 3004 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `CREDENTIAL_SIGNING_SECRET` (HMAC secret for credential authenticity — without it the service falls back to a development secret and credentials issued elsewhere are reported as `FORGED_SIGNATURE`); optionally `STORE_DRIVER` (`mongo` by default, `memory` runs without a database), `APPLICANT_SERVICE_URL` (in compose, the Gateway prefix `http://gateway:3000/applicant`; if unset, Applicant Service is mocked), `HTTP_TIMEOUT_MS` (`2000` by default), `TASK_TIMEOUT_MS` (`3000` by default; a request still running after it gets `504 TASK_TIMEOUT`), `MAX_CONCURRENT_TASKS` (`50` by default; beyond it `503 CONCURRENCY_LIMIT_REACHED` with `Retry-After: 1`) and `ENABLE_TEST_HOOKS` (`false`; demo only, enables `?simulateDelayMs=`) |
 | Server Rules Service | [`ion190/server-rules-service:2.0.0-rc.1`](https://hub.docker.com/r/ion190/server-rules-service) | 3005 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `UNIVERSITY_RECORD_SERVICE_URL` — if unset or if University Record Service is unreachable, Server Rules Service falls back to its built-in mock university records; if a university record is unavailable, rules requiring that data are reported as unevaluable |
 | University Record Service | [`ion190/university-record-service:2.0.0-rc.1`](https://hub.docker.com/r/ion190/university-record-service) | 3006 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` |
-| Moderation Service | [`d3adeye/moderation-service:0.3.0`](https://hub.docker.com/r/d3adeye/moderation-service) | 3007 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` — if unset, falls back to mocked responses for those dependencies — and `DISCORD_DMS_SERVICE_URL` (verdicts are not posted to chat when unset) |
-| Discord DMs Service | [`d3adeye/discord-dms-service:0.3.0`](https://hub.docker.com/r/d3adeye/discord-dms-service) | 3008 | `PORT`, `MONGODB_URI`, `MONGODB_DATABASE`; optionally `SESSION_SERVICE_URL` — when set, a session is checked against Server Moderation Session Service before its channels or roster are created; when unset, the roster is managed through this service's own `/sessions/{id}/members` endpoints |
+| Moderation Service | [`d3adeye/moderation-service:2.0.0-rc.2`](https://hub.docker.com/r/d3adeye/moderation-service) | 3007, not published — reached through the Gateway at `/moderation` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` (in compose the Gateway prefixes; if unset, those dependencies are simulated) and `DISCORD_DMS_SERVICE_URL` (verdicts are not posted to chat when unset) |
+| Discord DMs Service | [`d3adeye/discord-dms-service:2.0.0-rc.1`](https://hub.docker.com/r/d3adeye/discord-dms-service) | 3008 WebSocket (published), 3009 REST (not published — reached through the Gateway at `/discord-dms`) | `WS_PORT` (`3008`, serves `/ws/...` only), `HTTP_PORT` (`3009`, serves every REST endpoint and `/status`), `MONGODB_URI`, `MONGODB_DATABASE`; optionally `SESSION_SERVICE_URL` — when set, a session is checked against Server Moderation Session Service before its channels or roster are created; when unset, the roster is managed through this service's own `/sessions/{id}/members` endpoints |
 
 Pull an image directly, e.g.:
 ```bash
