@@ -230,7 +230,7 @@ Notes for callers:
   | `404` | `ROUTE_NOT_FOUND` | the first path segment is not a known prefix |
   | `502` | `BAD_GATEWAY` | the service is unreachable |
   | `503` | `CONCURRENCY_LIMIT_REACHED` | `MAX_CONCURRENT_TASKS` requests are already in progress; sent with `Retry-After: 1`, the request is not forwarded |
-  | `503` | `SERVICE_UNAVAILABLE` | `POST /ws/negotiate` was called while `WS_TICKET_SECRET` is unset, so the Gateway cannot sign a ticket. Like the pair on `502`, the two `503`s are told apart by their code, not their status |
+  | `503` | `WS_NEGOTIATION_DISABLED` | `POST /ws/negotiate` was called while `WS_TICKET_SECRET` is unset. Unlike `CONCURRENCY_LIMIT_REACHED`, retrying never helps: it is a configuration state, not load. Like the pair on `502`, the two `503`s are told apart by their code |
   | `504` | `GATEWAY_TIMEOUT` | the service did not answer within `UPSTREAM_TIMEOUT_MS` |
 
   Errors produced by a service (e.g. its `404 NOT_FOUND` for a missing resource) pass through unchanged, so `ROUTE_NOT_FOUND` always means a wrong prefix, never a missing resource.
@@ -240,7 +240,7 @@ Notes for callers:
   Besides these, the Gateway answers `404 NOT_FOUND` for a path with no service prefix at all (e.g. `GET /`) and `500 INTERNAL_ERROR` for an unexpected error of its own.
 - The Discord DMs WebSocket is not proxied: clients connect to it directly after negotiating with the Gateway. A long-lived socket proxied through the Gateway would hold one of its slots for a whole shift, so the Gateway authorises the connection up front and then steps out of the way.
 
-  **Negotiating a socket.** `POST /ws/negotiate` with `{sessionId, channel, playerId}` answers `{url, ticket, expiresAt}`. The client then opens `<url>?ticket=<ticket>`, which is a direct connection to Discord DMs Service on its published WebSocket port. `url` is the address the *client* can reach, from the Gateway's `DISCORD_DMS_WS_PUBLIC_URL` (in the shared stack `ws://localhost:3008`) — not the in-network name, which a client outside the compose network cannot resolve.
+  **Negotiating a socket.** `POST /ws/negotiate` with `{sessionId, channel, playerId}` answers `{url, ticket, expiresAt}`. A missing or empty field is `422 VALIDATION_FAILED`, as everywhere else in this contract. The call is an ordinary request through the Gateway, so it counts against `MAX_CONCURRENT_TASKS` like any other; only the socket it authorises stays outside. The client then opens `<url>?ticket=<ticket>`, which is a direct connection to Discord DMs Service on its published WebSocket port. `url` is the address the *client* can reach, from the Gateway's `DISCORD_DMS_WS_PUBLIC_URL` (in the shared stack `ws://localhost:3008`) — not the in-network name, which a client outside the compose network cannot resolve.
 
   **The ticket** is `<payload>.<signature>`, both base64url without padding:
 
@@ -248,13 +248,17 @@ Notes for callers:
   - `signature` is `HMAC-SHA256(payload, WS_TICKET_SECRET)` over the base64url payload text exactly as it appears in the ticket, so both sides sign the same bytes without re-serialising the JSON.
   - `WS_TICKET_SECRET` is shared by the Gateway and Discord DMs Service through the environment and is never sent to a client.
 
-  **The `playerId` comes from the request body** and the Gateway does not yet check who is asking, so until authorisation lands (Lab 2, grade 10) the ticket moves the question of identity from the socket to this endpoint rather than settling it. From then on `/ws/negotiate` takes the player from the caller's token instead.
+  **The `playerId` comes from the request body**, and the Gateway does not yet check who is asking. Until authorisation lands (Lab 2, grade 10) a ticket therefore proves only that the request went through the Gateway — not who sent it. It narrows the problem rather than solving it: the socket no longer trusts a query parameter, but anyone who can call `/ws/negotiate` can still ask for a ticket in another player's name.
+
+  Once the Gateway validates `Authorization`, `/ws/negotiate` takes the player from the validated token (the `X-Player-Id` it already sets after authorisation) and ignores a `playerId` in the body that disagrees with it. From then on the ticket does prove identity, and this paragraph goes away.
 
   **A ticket is bound to one channel.** Discord DMs rejects it unless `sessionId`, `channel` and `playerId` all match the connection being opened, so a ticket for `#general-mod-chat` cannot open `#faculty-check`. A client opening several channels negotiates once per channel.
 
-  **Discord DMs answers `401 UNAUTHORIZED`** when the ticket is missing, malformed, signed with another secret, expired, or issued for a different session, channel or player. Once the ticket is accepted, the channel-access rules apply unchanged: a player who was never assigned the channel still gets `403 FORBIDDEN`. The ticket says *who you are*; the roster still says *what you may read*.
+  **Discord DMs answers `401 UNAUTHORIZED`** when the ticket is missing, malformed, signed with another secret, expired, or issued for a different session, channel or player. That answer is the HTTP response to the upgrade handshake, so it arrives before any socket is opened. Once the ticket is accepted, the channel-access rules apply unchanged: a player who was never assigned the channel still gets `403 FORBIDDEN`. The ticket settles *who is connecting*; the roster still settles *what they may read*.
 
-  **While `WS_TICKET_SECRET` is unset**, Discord DMs keeps accepting `?playerId=` as before and the Gateway answers `503` to `/ws/negotiate`. That is the state before this is rolled out, so the services can ship the support independently of each other.
+  **A ticket may be used more than once** inside its 60 seconds. It is not a nonce, and nothing tracks which tickets have been spent: the short life is what bounds the damage of a leaked one. The signature is compared in constant time, and `exp` is allowed a few seconds of leeway so a small clock difference between containers does not refuse a ticket that was just issued.
+
+  **While `WS_TICKET_SECRET` is unset**, Discord DMs keeps accepting `?playerId=` as before and the Gateway answers `503 WS_NEGOTIATION_DISABLED`. That is the state before this is rolled out, so the two services can ship their halves independently. Because that fallback is silent from the outside, Discord DMs logs a warning at startup when the secret is missing, and the shared `docker-compose.yml` sets it on both services from `.env` — a forgotten secret should be visible, not merely permissive.
 
 #### Player Service
 | Method | Path | Request | Response |
