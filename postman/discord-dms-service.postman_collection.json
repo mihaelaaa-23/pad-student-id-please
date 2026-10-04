@@ -6,12 +6,12 @@
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    { "key": "baseUrl", "value": "http://localhost:3008" },
+    { "key": "baseUrl", "value": "http://localhost:3000/discord-dms" },
     { "key": "sessionId", "value": "shift-001" },
     { "key": "moderatorId", "value": "player-moderator-1" },
     { "key": "juniorId", "value": "player-junior-1" },
     { "key": "messageId", "value": "" },
-    { "key": "sessionServiceUrl", "value": "http://localhost:3002" }
+    { "key": "sessionServiceUrl", "value": "http://localhost:3000/session" }
   ],
   "item": [
     {

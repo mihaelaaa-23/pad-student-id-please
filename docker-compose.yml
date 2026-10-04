@@ -16,7 +16,9 @@ services:
       RULES_SERVICE_URL: http://server-rules-service:3005
       UNIVERSITY_RECORD_SERVICE_URL: http://university-record-service:3006
       MODERATION_SERVICE_URL: http://moderation-service:3007
-      DISCORD_DMS_SERVICE_URL: http://discord-dms-service:3008
+      # Discord DMs serves REST on 3009; 3008 is the WebSocket listener alone, so
+      # forwarding there would answer 404 for every REST call.
+      DISCORD_DMS_SERVICE_URL: http://discord-dms-service:3009
       UPSTREAM_TIMEOUT_MS: ${GATEWAY_UPSTREAM_TIMEOUT_MS:-10000}
 
   # ==================== Player Service (Mihaela) ====================
@@ -258,17 +260,17 @@ services:
 
   # ==================== Moderation Service (Liviu) ====================
   moderation-service:
-    image: d3adeye/moderation-service:0.3.0
+    image: d3adeye/moderation-service:2.0.0-rc.2
     restart: unless-stopped
-    ports:
-      - "3007:3007"
+    # Not published: every REST call reaches this service through the Gateway,
+    # at http://localhost:3000/moderation.
     environment:
       PORT: 3007
-      APPLICANT_SERVICE_URL: http://applicant-service:3003
-      CREDENTIAL_SERVICE_URL: http://credential-service:3004
-      RULES_SERVICE_URL: http://server-rules-service:3005
-      UNIVERSITY_RECORD_SERVICE_URL: http://university-record-service:3006
-      DISCORD_DMS_SERVICE_URL: http://discord-dms-service:3008
+      APPLICANT_SERVICE_URL: http://gateway:3000/applicant
+      CREDENTIAL_SERVICE_URL: http://gateway:3000/credential
+      RULES_SERVICE_URL: http://gateway:3000/server-rules
+      UNIVERSITY_RECORD_SERVICE_URL: http://gateway:3000/university-record
+      DISCORD_DMS_SERVICE_URL: http://gateway:3000/discord-dms
       DB_HOST: moderation-db
       DB_PORT: 5432
       DB_USER: ${MODERATION_DB_USER}
@@ -296,15 +298,20 @@ services:
 
   # ==================== Discord DMs Service (Liviu) ====================
   discord-dms-service:
-    image: d3adeye/discord-dms-service:0.3.0
+    image: d3adeye/discord-dms-service:2.0.0-rc.1
     restart: unless-stopped
+    # Only the WebSocket port is published. A client negotiates with the Gateway
+    # and then connects to the socket directly, rather than keeping the Gateway
+    # busy proxying a long-lived connection. REST lives on 3009, which stays
+    # inside the network, so it can only be reached through the Gateway.
     ports:
       - "3008:3008"
     environment:
-      PORT: 3008
+      WS_PORT: 3008
+      HTTP_PORT: 3009
       MONGODB_URI: mongodb://${DISCORD_DMS_DB_USER}:${DISCORD_DMS_DB_PASSWORD}@discord-dms-db:27017/?authSource=admin
       MONGODB_DATABASE: ${DISCORD_DMS_DB_NAME}
-      SESSION_SERVICE_URL: http://session-service:3002
+      SESSION_SERVICE_URL: http://gateway:3000/session
     depends_on:
       discord-dms-db:
         condition: service_healthy
