@@ -206,6 +206,13 @@ Notes for callers:
 
 - Example: `GET /applicant/applicants/42` is forwarded as `GET /applicants/42` to Applicant Service. `GET /status` is the Gateway's own; a service's status is `/<prefix>/status`.
 - `Authorization` is never forwarded to a service. Client-sent `X-Player-Id`, `X-Caller-*`, `Forwarded` and `X-Forwarded-*` headers are removed — only the Gateway sets them (`X-Player-Id` / `X-Caller-*` after authorization), so services can trust them.
+- Authorization (Lab 2, grade 10). The Gateway is the only place a token is checked; services never see `Authorization` and trust the headers the Gateway sets.
+  - **Public routes**, no token needed: `GET /status`, `GET /<prefix>/status`, `POST /player/players/register` and `POST /player/players/login`. Every other request needs `Authorization: Bearer <token>`.
+  - **A player token** is the `token` returned by `POST /player/players/login`: a JWT signed with HS256 and `JWT_SECRET`, which only Player Service (signs) and the Gateway (verifies) hold. Claims: `sub` (the `playerId`), `iss` (`"player-service"`), `iat` and `exp` (Unix seconds; `exp` is 24 hours after `iat`). The Gateway checks the signature, `iss` and `exp`, then forwards the request with `X-Player-Id: <sub>` and `X-Caller-Type: player`. It accepts only `HS256` and rejects any other `alg`, including `none`, rather than taking the algorithm from the token header. `exp` is accepted up to 5 seconds late, for clock skew between containers. `JWT_SECRET` is at least 32 characters.
+  - **A service token** is for service-to-service calls, which also go through the Gateway and carry no player. It is one shared secret, `SERVICE_TOKEN`, set from `.env` on the Gateway and on every service; a service sends it as `Authorization: Bearer <SERVICE_TOKEN>` on every outgoing call. The Gateway forwards such a request with `X-Caller-Type: service` and no `X-Player-Id`. A service call therefore carries no verified player: a player id passed inside the request itself (for example University Record's `requestingPlayerId`) is still whatever the calling service sent.
+  - Anything else (no header, a scheme other than `Bearer`, a malformed, wrongly signed or expired token, another issuer) is answered `401 UNAUTHORIZED` with `WWW-Authenticate: Bearer` and is not forwarded. The `401` is decided before the request takes one of the Gateway's concurrency slots, so requests without a token cannot fill them. For a calling service that is a refused lookup (a configuration error, `502 DEPENDENCY_REFUSED`), never a reason to fall back to a mock.
+  - The Gateway authenticates; it does not decide what a caller may do. A service that needs to (for example "only the author may delete this message") uses `X-Player-Id` and `X-Caller-Type`, which a client cannot forge because the Gateway removes client-sent copies.
+  - Rollout: while `JWT_SECRET` is unset on the Gateway nothing is enforced and requests pass as before, so Player Service, the other services and the Postman collections can adopt this independently. `JWT_SECRET` and `SERVICE_TOKEN` are set together: the Gateway refuses to start when only one of them is set, and logs a warning at startup when neither is, so a stack without authentication is never silent. In the shared stack both are set. Every Postman collection then registers and logs in a player through the Gateway first and sends that token on its requests.
 - Every forwarded request carries `X-Request-Id` (kept if the client sent one, otherwise generated, and returned in the response), plus `X-Forwarded-Prefix` and `X-Forwarded-For`.
 - The Gateway waits `UPSTREAM_TIMEOUT_MS` (default `10000`) for a service before giving up.
 - Timeout budget of the shared stack (Lab 2, grade 8). A caller must never give up on work the callee is still doing, so on every hop the caller's outgoing call timeout is larger than the callee's `TASK_TIMEOUT_MS`, and a service's own `TASK_TIMEOUT_MS` is larger than its outgoing call timeout. Values are what `docker-compose.yml` sets; an image run without them falls back to its own defaults.
@@ -226,6 +233,7 @@ Notes for callers:
 
   | Status | Code | When |
   |---|---|---|
+  | `401` | `UNAUTHORIZED` | a non-public route was called without a valid `Authorization: Bearer` token (missing, malformed, wrongly signed, expired, or another issuer); sent with `WWW-Authenticate: Bearer`, the request is not forwarded |
   | `404` | `ROUTE_NOT_FOUND` | the first path segment is not a known prefix |
   | `502` | `BAD_GATEWAY` | the service is unreachable |
   | `503` | `CONCURRENCY_LIMIT_REACHED` | `MAX_CONCURRENT_TASKS` requests are already in progress; sent with `Retry-After: 1`, the request is not forwarded |
@@ -251,6 +259,7 @@ Notes for callers:
 
 >Notes for callers:
 >- `POST /players/login` returns `401 UNAUTHORIZED` for an unknown username or wrong password.
+>- The `token` from `POST /players/login` is a JWT (HS256, signed with `JWT_SECRET`) with the claims `sub` (the `playerId`), `iss` (`"player-service"`), `iat` and `exp` (24 hours later). Clients send it to the Gateway as `Authorization: Bearer <token>`; the Gateway validates it and does not forward it, so Player Service never receives it back. See "Authorization" in the Gateway notes.
 >- A duplicate username on `POST /players/register` returns `409 CONFLICT`; unknown IDs return `404 NOT_FOUND`.
 >- Missing register fields, or a non-numeric `xpGained`, return `422 VALIDATION_FAILED`.
 >- Level is `1 + floor(xp / 100)`.
