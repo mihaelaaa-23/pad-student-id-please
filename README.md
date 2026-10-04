@@ -230,6 +230,7 @@ Notes for callers:
   | `404` | `ROUTE_NOT_FOUND` | the first path segment is not a known prefix |
   | `502` | `BAD_GATEWAY` | the service is unreachable |
   | `503` | `CONCURRENCY_LIMIT_REACHED` | `MAX_CONCURRENT_TASKS` requests are already in progress; sent with `Retry-After: 1`, the request is not forwarded |
+  | `503` | `SERVICE_UNAVAILABLE` | `POST /ws/negotiate` was called while `WS_TICKET_SECRET` is unset, so the Gateway cannot sign a ticket. Like the pair on `502`, the two `503`s are told apart by their code, not their status |
   | `504` | `GATEWAY_TIMEOUT` | the service did not answer within `UPSTREAM_TIMEOUT_MS` |
 
   Errors produced by a service (e.g. its `404 NOT_FOUND` for a missing resource) pass through unchanged, so `ROUTE_NOT_FOUND` always means a wrong prefix, never a missing resource.
@@ -246,6 +247,8 @@ Notes for callers:
   - `payload` is the JSON `{"sessionId": string, "channel": string, "playerId": string, "exp": int}`, where `exp` is a Unix timestamp in seconds, 60 seconds after issue.
   - `signature` is `HMAC-SHA256(payload, WS_TICKET_SECRET)` over the base64url payload text exactly as it appears in the ticket, so both sides sign the same bytes without re-serialising the JSON.
   - `WS_TICKET_SECRET` is shared by the Gateway and Discord DMs Service through the environment and is never sent to a client.
+
+  **The `playerId` comes from the request body** and the Gateway does not yet check who is asking, so until authorisation lands (Lab 2, grade 10) the ticket moves the question of identity from the socket to this endpoint rather than settling it. From then on `/ws/negotiate` takes the player from the caller's token instead.
 
   **A ticket is bound to one channel.** Discord DMs rejects it unless `sessionId`, `channel` and `playerId` all match the connection being opened, so a ticket for `#general-mod-chat` cannot open `#faculty-check`. A client opening several channels negotiates once per channel.
 
