@@ -23,7 +23,7 @@ services:
 
   # ==================== Player Service (Mihaela) ====================
   player-service:
-    image: mihaela5/player-service:0.5.0
+    image: mihaela5/player-service:2.0.0-rc.1
     restart: unless-stopped
     ports:
       - "3001:3001"
@@ -34,6 +34,14 @@ services:
       DB_USER: ${PLAYER_DB_USER}
       DB_PASSWORD: ${PLAYER_DB_PASSWORD}
       DB_NAME: ${PLAYER_DB_NAME}
+      # Lab 2, grade 8: task timeout (504 TASK_TIMEOUT) and concurrent task limit
+      # (503 CONCURRENCY_LIMIT_REACHED). A leaf in the timeout budget: 2000, below the
+      # 4500 Session waits for it.
+      TASK_TIMEOUT_MS: ${PLAYER_TASK_TIMEOUT_MS:-2000}
+      MAX_CONCURRENT_TASKS: ${PLAYER_MAX_CONCURRENT_TASKS:-50}
+      # Lab 2, grade 10: signs the login token (JWT, HS256). Required, at least 32
+      # characters; the service does not start without it.
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env, see .env.example}
     depends_on:
       player-db:
         condition: service_healthy
@@ -56,7 +64,7 @@ services:
 
   # ==================== Server Moderation Session Service (Mihaela) ====================
   session-service:
-    image: mihaela5/session-service:2.0.0-rc.1
+    image: mihaela5/session-service:2.0.0-rc.2
     restart: unless-stopped
     ports:
       - "3002:3002"
@@ -73,6 +81,12 @@ services:
       CREDENTIAL_SERVICE_URL: http://gateway:3000/credential
       RULES_SERVICE_URL: http://gateway:3000/server-rules
       UNIVERSITY_RECORD_SERVICE_URL: http://gateway:3000/university-record
+      # Lab 2, grade 8: task timeout (504 TASK_TIMEOUT) and concurrent task limit
+      # (503 CONCURRENCY_LIMIT_REACHED). Timeout budget (README, Gateway notes): 4500 per
+      # outgoing call > every callee's TASK_TIMEOUT_MS; own cap 8000 < the Gateway's 10000.
+      HTTP_TIMEOUT_MS: ${SESSION_HTTP_TIMEOUT_MS:-4500}
+      TASK_TIMEOUT_MS: ${SESSION_TASK_TIMEOUT_MS:-8000}
+      MAX_CONCURRENT_TASKS: ${SESSION_MAX_CONCURRENT_TASKS:-50}
     depends_on:
       session-db:
         condition: service_healthy
