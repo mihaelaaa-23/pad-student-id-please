@@ -52,7 +52,7 @@
               "// Lab 2, grade 10: every route behind the Gateway needs a player token once its",
               "// authorization is on, so the collection registers and logs in a fresh player first.",
               "// It also works while authorization is off: register and login are always public.",
-              "pm.collectionVariables.set('username', 'applicant_pm_' + Date.now());"
+              "pm.collectionVariables.set('username', 'server_rules_pm_' + Date.now());"
             ]
           }
         },
