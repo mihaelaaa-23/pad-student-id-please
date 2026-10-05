@@ -203,7 +203,7 @@ services:
 
   # ==================== Server Rules Service (Ion) ====================
   server-rules-service:
-    image: ion190/server-rules-service:2.0.0-rc.3
+    image: ion190/server-rules-service:2.0.0-rc.4
     restart: unless-stopped
     ports:
       - "3005:3005"
@@ -215,8 +215,9 @@ services:
       DB_PASSWORD: ${RULES_DB_PASSWORD}
       DB_NAME: ${RULES_DB_NAME}
       UNIVERSITY_RECORD_SERVICE_URL: http://gateway:3000/university-record
-      TASK_TIMEOUT_MS: 3000
-      MAX_CONCURRENT_TASKS: 50
+      SERVICE_TOKEN: ${SERVICE_TOKEN:-}
+      TASK_TIMEOUT_MS: ${RULES_TASK_TIMEOUT_MS:-3000}
+      MAX_CONCURRENT_TASKS: ${RULES_MAX_CONCURRENT_TASKS:-50}
     depends_on:
       rules-db:
         condition: service_healthy
@@ -250,8 +251,8 @@ services:
       DB_USER: ${UNIVERSITY_RECORD_DB_USER}
       DB_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
       DB_NAME: ${UNIVERSITY_RECORD_DB_NAME}
-      TASK_TIMEOUT_MS: 2000
-      MAX_CONCURRENT_TASKS: 50
+      TASK_TIMEOUT_MS: ${UNIVERSITY_RECORD_TASK_TIMEOUT_MS:-2000}
+      MAX_CONCURRENT_TASKS: ${UNIVERSITY_RECORD_MAX_CONCURRENT_TASKS:-50}
     depends_on:
       university-record-db:
         condition: service_healthy
