@@ -239,13 +239,20 @@
           "script": {
             "type": "text/javascript",
             "exec": [
+              "// Lab 2, grade 10: XP is awarded by a service (Session, when a shift ends), never by a",
+              "// player. Once the Gateway's authorization is on, this request, sent with the player's own",
+              "// token, is refused. While it is off nobody is authenticated and the update goes through.",
               "const json = pm.response.json();",
-              "pm.test('xp was updated', function () {",
-              "    pm.response.to.have.status(200);",
+              "pm.test('xp: updated while authorization is off, 403 FORBIDDEN for a player once it is on', function () {",
+              "    pm.expect([200, 403]).to.include(pm.response.code);",
               "});",
-              "pm.test('xp and level match the leveling formula', function () {",
-              "    pm.expect(json.xp).to.eql(150);",
-              "    pm.expect(json.level).to.eql(1 + Math.floor(150 / 100));",
+              "pm.test('the body matches: the leveling formula, or the FORBIDDEN error', function () {",
+              "    if (pm.response.code === 200) {",
+              "        pm.expect(json.xp).to.eql(150);",
+              "        pm.expect(json.level).to.eql(1 + Math.floor(150 / 100));",
+              "    } else {",
+              "        pm.expect(json.error.code).to.eql('FORBIDDEN');",
+              "    }",
               "});"
             ]
           }
