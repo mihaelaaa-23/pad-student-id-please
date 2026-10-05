@@ -696,7 +696,7 @@ See `docker-compose.yml` at the repo root for the full setup, including each ser
 
 **Requirements:** Docker 24+ with Docker Compose v2. No local Node.js or Go is needed to run the services. Node.js 18+ is only needed for running the Postman collections with newman (or import them into the Postman app instead).
 
-1. Create your environment file with `cp .env.example .env`, then replace every `replace-with-…` placeholder with a real value. `.env.example` shows how to generate strong values, and `.env` is gitignored and must never be committed.
+1. Create your environment file with `cp .env.example .env`, then replace every `replace-with-…` placeholder with a real value and generate your own `JWT_SECRET` (empty in `.env.example` on purpose: `docker compose` refuses to start without it, so no machine runs with a published secret). `.env.example` shows how to generate strong values, and `.env` is gitignored and must never be committed.
 2. Start everything with `docker compose up -d`.
 3. Check that each service is healthy with `curl http://localhost:<port>/status`.
 4. Test a service with its Postman collection from `postman/`, e.g. `npx newman run postman/session-service.postman_collection.json`.
