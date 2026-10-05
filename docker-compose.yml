@@ -34,7 +34,7 @@ services:
 
   # ==================== Player Service (Mihaela) ====================
   player-service:
-    image: mihaela5/player-service:2.0.0-rc.2
+    image: mihaela5/player-service:2.0.0-rc.3
     restart: unless-stopped
     # Not published: every REST call reaches this service through the Gateway,
     # at http://localhost:3000/player.
