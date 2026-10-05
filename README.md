@@ -285,6 +285,7 @@ Notes for callers:
 >- The `token` from `POST /players/login` is a JWT (HS256, signed with `JWT_SECRET`) with the claims `sub` (the `playerId`), `iss` (`"player-service"`), `iat` and `exp` (24 hours later). Clients send it to the Gateway as `Authorization: Bearer <token>`; the Gateway validates it and does not forward it, so Player Service never receives it back. See "Authorization" in the Gateway notes.
 >- A duplicate username on `POST /players/register` returns `409 CONFLICT`; unknown IDs return `404 NOT_FOUND`.
 >- Missing register fields, or a non-numeric `xpGained`, return `422 VALIDATION_FAILED`.
+>- Who may call what (Lab 2, grade 10), decided from the `X-Caller-Type` and `X-Player-Id` headers the Gateway sets after it validated the token: `PATCH /players/{id}/xp` is for services only (Session awards XP when a shift ends), so a player token gets `403 FORBIDDEN`; `DELETE /players/{id}` deletes the caller's own account, so a player token for another player, or the service token, gets `403 FORBIDDEN`. The `403` is decided before validation and before the player is looked up, so it does not reveal whether an id exists. While the Gateway's authorization is off those headers are absent and nothing is enforced, as before.
 >- Level is `1 + floor(xp / 100)`.
 >- Errors come back as `{error: {code: string, message: string}}`.
  
