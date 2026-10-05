@@ -114,8 +114,8 @@ services:
   applicant-service:
     image: ciprik13/applicant-service:2.0.0-rc.4
     restart: unless-stopped
-    ports:
-      - "3003:3003"
+    # Not published: every REST call reaches this service through the Gateway,
+    # at http://localhost:3000/applicant.
     environment:
       PORT: 3003
       STORE_DRIVER: mongo
@@ -163,8 +163,8 @@ services:
   credential-service:
     image: ciprik13/credential-service:2.0.0-rc.4
     restart: unless-stopped
-    ports:
-      - "3004:3004"
+    # Not published: every REST call reaches this service through the Gateway,
+    # at http://localhost:3000/credential.
     environment:
       PORT: 3004
       STORE_DRIVER: mongo
