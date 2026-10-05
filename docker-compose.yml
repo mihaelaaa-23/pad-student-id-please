@@ -64,7 +64,7 @@ services:
 
   # ==================== Server Moderation Session Service (Mihaela) ====================
   session-service:
-    image: mihaela5/session-service:2.0.0-rc.2
+    image: mihaela5/session-service:2.0.0-rc.3
     restart: unless-stopped
     # Not published: every REST call reaches this service through the Gateway,
     # at http://localhost:3000/session.
@@ -87,6 +87,9 @@ services:
       HTTP_TIMEOUT_MS: ${SESSION_HTTP_TIMEOUT_MS:-4500}
       TASK_TIMEOUT_MS: ${SESSION_TASK_TIMEOUT_MS:-8000}
       MAX_CONCURRENT_TASKS: ${SESSION_MAX_CONCURRENT_TASKS:-50}
+      # Lab 2, grade 10: sent as Authorization: Bearer on every outgoing call.
+      # Empty by default, so nothing changes until authorization is turned on.
+      SERVICE_TOKEN: ${SERVICE_TOKEN:-}
     depends_on:
       session-db:
         condition: service_healthy
