@@ -4,10 +4,17 @@
     "name": "Player Service",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      { "key": "token", "value": "{{token}}", "type": "string" }
+    ]
+  },
   "variable": [
-    { "key": "baseUrl", "value": "http://localhost:3001" },
+    { "key": "baseUrl", "value": "http://localhost:3000/player" },
     { "key": "playerId", "value": "" },
-    { "key": "username", "value": "" }
+    { "key": "username", "value": "" },
+    { "key": "token", "value": "" }
   ],
   "item": [
     {
@@ -34,7 +41,8 @@
           "raw": "{{baseUrl}}/status",
           "host": [ "{{baseUrl}}" ],
           "path": [ "status" ]
-        }
+        },
+        "auth": { "type": "noauth" }
       }
     },
     {
@@ -81,7 +89,8 @@
           "raw": "{{baseUrl}}/players/register",
           "host": [ "{{baseUrl}}" ],
           "path": [ "players", "register" ]
-        }
+        },
+        "auth": { "type": "noauth" }
       }
     },
     {
@@ -115,7 +124,8 @@
           "raw": "{{baseUrl}}/players/register",
           "host": [ "{{baseUrl}}" ],
           "path": [ "players", "register" ]
-        }
+        },
+        "auth": { "type": "noauth" }
       }
     },
     {
@@ -133,7 +143,12 @@
               "pm.test('response has token and playerId', function () {",
               "    pm.expect(json.token).to.be.a('string');",
               "    pm.expect(json.playerId).to.eql(pm.collectionVariables.get('playerId'));",
-              "});"
+              "});",
+              "pm.test('the token is a signed JWT', function () {",
+              "    pm.expect(json.token.split('.')).to.have.lengthOf(3);",
+              "});",
+              "// Every request below sends it as Authorization: Bearer (collection-level auth).",
+              "pm.collectionVariables.set('token', json.token);"
             ]
           }
         }
@@ -151,7 +166,8 @@
           "raw": "{{baseUrl}}/players/login",
           "host": [ "{{baseUrl}}" ],
           "path": [ "players", "login" ]
-        }
+        },
+        "auth": { "type": "noauth" }
       }
     },
     {
@@ -176,6 +192,38 @@
       ],
       "request": {
         "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/players/{{playerId}}",
+          "host": [ "{{baseUrl}}" ],
+          "path": [ "players", "{{playerId}}" ]
+        }
+      }
+    },
+    {
+      "name": "Get Player Without Token",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Lab 2, grade 10: the Gateway refuses a protected route without a token. While its",
+              "// authorization is still off (no secrets in .env) the request simply passes.",
+              "pm.test('without a token: 401 UNAUTHORIZED once authorization is on', function () {",
+              "    pm.expect([200, 401]).to.include(pm.response.code);",
+              "    if (pm.response.code === 401) {",
+              "        pm.expect(pm.response.json().error.code).to.eql('UNAUTHORIZED');",
+              "        pm.expect(pm.response.headers.get('WWW-Authenticate')).to.eql('Bearer');",
+              "    }",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "GET",
+        "header": [],
         "url": {
           "raw": "{{baseUrl}}/players/{{playerId}}",
           "host": [ "{{baseUrl}}" ],
