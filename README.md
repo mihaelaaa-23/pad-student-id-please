@@ -229,6 +229,8 @@ Notes for callers:
   | Discord DMs, REST | `8500` (to Session) | `9000` |
   | Gateway | `10000` (`UPSTREAM_TIMEOUT_MS`) | — |
 
+  One hop is deliberately outside this rule. Moderation's call to Discord DMs, which announces a verdict in chat, is bounded by `3000` rather than by Discord DMs' `9000` cap. It is best-effort: the decision is already stored by the time it runs, a failure only reports `announcedInChat: false`, and nothing is retried, so giving up early costs an announcement rather than a decision. Worth knowing: giving up does not undo work already done. Discord DMs stores a message before broadcasting it, so a verdict reported as not announced may still have reached the channel.
+
   `TASK_TIMEOUT_MS` is a cap, not a sum: Session and Moderation make several calls per request, so two slow dependencies can use up `8000` and the service answers `504 TASK_TIMEOUT` itself. The Gateway's `10000` stays above every service's cap, so a client sees the service's own `504 TASK_TIMEOUT` rather than `504 GATEWAY_TIMEOUT`. Services that do not implement grade 8 yet adopt their row when they do.
 - Errors produced by the Gateway itself use the shared envelope:
 
