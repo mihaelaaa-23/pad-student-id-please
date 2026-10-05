@@ -3,7 +3,7 @@ services:
   # The single entry point. No depends_on: the Gateway starts independently and
   # answers 502 BAD_GATEWAY until a service is up.
   gateway:
-    image: mihaela5/gateway:2.0.0-rc.1
+    image: mihaela5/gateway:2.0.0-rc.2
     restart: unless-stopped
     ports:
       - "3000:3000"
@@ -20,6 +20,11 @@ services:
       # forwarding there would answer 404 for every REST call.
       DISCORD_DMS_SERVICE_URL: http://discord-dms-service:3009
       UPSTREAM_TIMEOUT_MS: ${GATEWAY_UPSTREAM_TIMEOUT_MS:-10000}
+      # Lab 2, grade 8: requests forwarded at once, service-to-service calls included;
+      # the next one gets 503 CONCURRENCY_LIMIT_REACHED with Retry-After: 1. Far above a
+      # service's 50 on purpose: one client request holds a slot per hop (README,
+      # Gateway notes: 50 x 8 hops = 400 < 500).
+      MAX_CONCURRENT_TASKS: ${GATEWAY_MAX_CONCURRENT_TASKS:-500}
 
   # ==================== Player Service (Mihaela) ====================
   player-service:
