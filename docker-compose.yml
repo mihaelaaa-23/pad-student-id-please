@@ -25,6 +25,12 @@ services:
       # service's 50 on purpose: one client request holds a slot per hop (README,
       # Gateway notes: 50 x 8 hops = 400 < 500).
       MAX_CONCURRENT_TASKS: ${GATEWAY_MAX_CONCURRENT_TASKS:-500}
+      # Lab 2, grade 10: authorization. The Gateway validates the player token
+      # (JWT_SECRET, the secret Player Service signs it with) or the service token,
+      # tells the service who is calling (X-Player-Id, X-Caller-Type) and never
+      # forwards Authorization itself. Both are required and must differ.
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env, see .env.example}
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
       # Signs the tickets that authorise a websocket connection; Discord DMs
       # verifies them with the same secret.
       WS_TICKET_SECRET: ${WS_TICKET_SECRET:-}
@@ -53,6 +59,9 @@ services:
       # Lab 2, grade 10: signs the login token (JWT, HS256). Required, at least 32
       # characters; the service does not start without it.
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env, see .env.example}
+      # The Gateway's authorization is on, so a protected route called without its
+      # caller headers did not come through the Gateway: refuse it (401).
+      REQUIRE_CALLER_HEADERS: "true"
     depends_on:
       player-db:
         condition: service_healthy
@@ -98,9 +107,9 @@ services:
       HTTP_TIMEOUT_MS: ${SESSION_HTTP_TIMEOUT_MS:-4500}
       TASK_TIMEOUT_MS: ${SESSION_TASK_TIMEOUT_MS:-8000}
       MAX_CONCURRENT_TASKS: ${SESSION_MAX_CONCURRENT_TASKS:-50}
-      # Lab 2, grade 10: sent as Authorization: Bearer on every outgoing call.
-      # Empty by default, so nothing changes until authorization is turned on.
-      SERVICE_TOKEN: ${SERVICE_TOKEN:-}
+      # Lab 2, grade 10: sent as Authorization: Bearer on every outgoing call, so the
+      # Gateway lets this service's own requests through.
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
     depends_on:
       session-db:
         condition: service_healthy
@@ -146,9 +155,9 @@ services:
       HTTP_TIMEOUT_MS: ${APPLICANT_HTTP_TIMEOUT_MS:-2500}
       TASK_TIMEOUT_MS: ${APPLICANT_TASK_TIMEOUT_MS:-3000}
       MAX_CONCURRENT_TASKS: ${APPLICANT_MAX_CONCURRENT_TASKS:-50}
-      # Lab 2, grade 10: sent as Authorization: Bearer on every outgoing call.
-      # Empty by default, so nothing changes until authorization is turned on.
-      SERVICE_TOKEN: ${SERVICE_TOKEN:-}
+      # Lab 2, grade 10: sent as Authorization: Bearer on every outgoing call, so the
+      # Gateway lets this service's own requests through.
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
       ENABLE_TEST_HOOKS: ${ENABLE_TEST_HOOKS:-false}
     depends_on:
       applicant-db:
@@ -197,9 +206,9 @@ services:
       HTTP_TIMEOUT_MS: ${CREDENTIAL_HTTP_TIMEOUT_MS:-3500}
       TASK_TIMEOUT_MS: ${CREDENTIAL_TASK_TIMEOUT_MS:-4000}
       MAX_CONCURRENT_TASKS: ${CREDENTIAL_MAX_CONCURRENT_TASKS:-50}
-      # Lab 2, grade 10: sent as Authorization: Bearer on every outgoing call.
-      # Empty by default, so nothing changes until authorization is turned on.
-      SERVICE_TOKEN: ${SERVICE_TOKEN:-}
+      # Lab 2, grade 10: sent as Authorization: Bearer on every outgoing call, so the
+      # Gateway lets this service's own requests through.
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
       ENABLE_TEST_HOOKS: ${ENABLE_TEST_HOOKS:-false}
     depends_on:
       credential-db:
@@ -233,7 +242,7 @@ services:
       DB_PASSWORD: ${RULES_DB_PASSWORD}
       DB_NAME: ${RULES_DB_NAME}
       UNIVERSITY_RECORD_SERVICE_URL: http://gateway:3000/university-record
-      SERVICE_TOKEN: ${SERVICE_TOKEN:-}
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
       TASK_TIMEOUT_MS: ${RULES_TASK_TIMEOUT_MS:-3000}
       MAX_CONCURRENT_TASKS: ${RULES_MAX_CONCURRENT_TASKS:-50}
     depends_on:
@@ -302,9 +311,9 @@ services:
       RULES_SERVICE_URL: http://gateway:3000/server-rules
       UNIVERSITY_RECORD_SERVICE_URL: http://gateway:3000/university-record
       DISCORD_DMS_SERVICE_URL: http://gateway:3000/discord-dms
-      # Lab 2, grade 10: sent as Authorization: Bearer on every outgoing call.
-      # Empty by default, so nothing changes until authorization is turned on.
-      SERVICE_TOKEN: ${SERVICE_TOKEN:-}
+      # Lab 2, grade 10: sent as Authorization: Bearer on every outgoing call, so the
+      # Gateway lets this service's own requests through.
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
       # Lab 2, grade 8: per-request task timeout (504 TASK_TIMEOUT) and concurrent
       # task limit (503 CONCURRENCY_LIMIT_REACHED). /status is exempt.
       HTTP_TIMEOUT_MS: ${MODERATION_HTTP_TIMEOUT_MS:-4500}
@@ -352,9 +361,9 @@ services:
       MONGODB_DATABASE: ${DISCORD_DMS_DB_NAME}
       SESSION_SERVICE_URL: http://gateway:3000/session
       WS_TICKET_SECRET: ${WS_TICKET_SECRET:-}
-      # Lab 2, grade 10: sent as Authorization: Bearer on the session check.
-      # Empty by default, so nothing changes until authorization is turned on.
-      SERVICE_TOKEN: ${SERVICE_TOKEN:-}
+      # Lab 2, grade 10: sent as Authorization: Bearer on the session check, so the
+      # Gateway lets this service's own request through.
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
       # Lab 2, grade 8: the REST listener only. A socket is open for a whole
       # shift, so neither limit applies to the websocket port.
       HTTP_TIMEOUT_MS: ${DISCORD_DMS_HTTP_TIMEOUT_MS:-8500}
