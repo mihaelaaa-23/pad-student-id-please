@@ -291,7 +291,7 @@ services:
 
   # ==================== Moderation Service (Liviu) ====================
   moderation-service:
-    image: d3adeye/moderation-service:2.0.0-rc.3
+    image: d3adeye/moderation-service:2.0.0-rc.4
     restart: unless-stopped
     # Not published: every REST call reaches this service through the Gateway,
     # at http://localhost:3000/moderation.
@@ -302,6 +302,9 @@ services:
       RULES_SERVICE_URL: http://gateway:3000/server-rules
       UNIVERSITY_RECORD_SERVICE_URL: http://gateway:3000/university-record
       DISCORD_DMS_SERVICE_URL: http://gateway:3000/discord-dms
+      # Lab 2, grade 10: sent as Authorization: Bearer on every outgoing call.
+      # Empty by default, so nothing changes until authorization is turned on.
+      SERVICE_TOKEN: ${SERVICE_TOKEN:-}
       # Lab 2, grade 8: per-request task timeout (504 TASK_TIMEOUT) and concurrent
       # task limit (503 CONCURRENCY_LIMIT_REACHED). /status is exempt.
       HTTP_TIMEOUT_MS: ${MODERATION_HTTP_TIMEOUT_MS:-4500}
@@ -334,7 +337,7 @@ services:
 
   # ==================== Discord DMs Service (Liviu) ====================
   discord-dms-service:
-    image: d3adeye/discord-dms-service:2.0.0-rc.4
+    image: d3adeye/discord-dms-service:2.0.0-rc.5
     restart: unless-stopped
     # Only the WebSocket port is published. A client negotiates with the Gateway
     # and then connects to the socket directly, rather than keeping the Gateway
@@ -349,6 +352,9 @@ services:
       MONGODB_DATABASE: ${DISCORD_DMS_DB_NAME}
       SESSION_SERVICE_URL: http://gateway:3000/session
       WS_TICKET_SECRET: ${WS_TICKET_SECRET:-}
+      # Lab 2, grade 10: sent as Authorization: Bearer on the session check.
+      # Empty by default, so nothing changes until authorization is turned on.
+      SERVICE_TOKEN: ${SERVICE_TOKEN:-}
       # Lab 2, grade 8: the REST listener only. A socket is open for a whole
       # shift, so neither limit applies to the websocket port.
       HTTP_TIMEOUT_MS: ${DISCORD_DMS_HTTP_TIMEOUT_MS:-8500}
