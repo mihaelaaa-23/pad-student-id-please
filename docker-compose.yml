@@ -225,8 +225,6 @@ services:
   server-rules-service:
     image: ion190/server-rules-service:2.0.0-rc.4
     restart: unless-stopped
-    ports:
-      - "3005:3005"
     environment:
       PORT: 3005
       DB_HOST: rules-db
@@ -262,8 +260,6 @@ services:
   university-record-service:
     image: ion190/university-record-service:2.0.0-rc.4
     restart: unless-stopped
-    ports:
-      - "3006:3006"
     environment:
       PORT: 3006
       DB_HOST: university-record-db

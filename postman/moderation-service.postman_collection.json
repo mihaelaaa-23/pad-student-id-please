@@ -5,6 +5,7 @@
     "description": "Every HTTP endpoint of the Moderation Service (Team 18, PAD project \"Student ID, Please\"), ordered as a walkthrough of one shift: call three applicants, look the calls up, revise one of them, read the shift summary, then clean up.\n\nRun it top to bottom with the Collection Runner against a running stack (`./scripts/run.sh`, or `docker compose up -d`). Each request asserts its own status code and the decision id is passed between requests through a collection variable.\n\nThe applicant ids are not arbitrary. While the Applicant, Credential, Server Rules and University Record Services are not deployed yet, this service simulates them, and the simulated applicant is derived from the applicant id - so the same id is always the same person and the assertions below hold every run:\n\n- `applicant-1006` is a clean, enrolled student, so **accept** is the right call\n- `applicant-1000` presents a forged student ID, so **reject** is the right call\n- `applicant-1026` was banned from the server before, so **ban** is the right call\n\nOnce a teammate deploys the real service, set its URL in `.env` and the same requests are answered from live data instead.\n\nThe collection is re-runnable: the first request under **Decisions** gives each run its own `sessionId` (`shift-<timestamp>`), because the service records one decision per applicant per session and would otherwise answer `409` on a second run.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
+  "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{token}}", "type": "string"}]},
   "variable": [
     { "key": "baseUrl", "value": "http://localhost:3000/moderation" },
     { "key": "sessionId", "value": "shift-001" },
@@ -13,9 +14,82 @@
     { "key": "forgedApplicant", "value": "applicant-1000" },
     { "key": "bannedApplicant", "value": "applicant-1026" },
     { "key": "decisionId", "value": "" },
-    { "key": "throwawayDecisionId", "value": "" }
+    { "key": "throwawayDecisionId", "value": "" },
+    { "key": "playerUrl", "value": "http://localhost:3000/player" },
+    { "key": "username", "value": "" },
+    { "key": "playerId", "value": "" },
+    { "key": "token", "value": "" }
   ],
   "item": [
+    {
+      "name": "Register Test Player",
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n    \"username\": \"{{username}}\",\n    \"email\": \"{{username}}@test.com\",\n    \"password\": \"pw123\"\n}" },
+        "url": {
+          "raw": "{{playerUrl}}/players/register",
+          "host": ["{{playerUrl}}"],
+          "path": ["players", "register"]
+        },
+        "description": "Registers a throwaway player. Register and login are public, so this works whether or not the Gateway is enforcing authorization yet."
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Lab 2, grade 10: every route behind the Gateway needs a player token once its",
+              "// authorization is on, so the collection registers and logs in a fresh player first.",
+              "// It also works while authorization is off: register and login are always public.",
+              "pm.collectionVariables.set('username', 'moderation_pm_' + Date.now());"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('test player was registered', function () { pm.response.to.have.status(201); });",
+              "pm.collectionVariables.set('playerId', pm.response.json().playerId);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Login Test Player",
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n    \"username\": \"{{username}}\",\n    \"password\": \"pw123\"\n}" },
+        "url": {
+          "raw": "{{playerUrl}}/players/login",
+          "host": ["{{playerUrl}}"],
+          "path": ["players", "login"]
+        },
+        "description": "Saves the token every request below sends as Authorization: Bearer, through the collection-level auth."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('test player logged in', function () { pm.response.to.have.status(200); });",
+              "pm.test('the token is a signed JWT', function () { pm.expect(json.token.split('.')).to.have.lengthOf(3); });",
+              "// Every request below sends it as Authorization: Bearer (collection-level auth).",
+              "pm.collectionVariables.set('token', json.token);"
+            ]
+          }
+        }
+      ]
+    },
     {
       "name": "Health",
       "item": [
@@ -592,6 +666,35 @@
               }
             }
           ]
+        }
+      ]
+    },
+    {
+      "name": "Delete Test Player",
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "url": {
+          "raw": "{{playerUrl}}/players/{{playerId}}",
+          "host": ["{{playerUrl}}"],
+          "path": ["players", "{{playerId}}"]
+        },
+        "description": "Removes the throwaway player, so re-running does not pile them up."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Clean-up with the player's own token: Player Service lets a player delete only",
+              "// their own account.",
+              "pm.test('test player was removed', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(pm.response.json().deleted).to.be.true;",
+              "});"
+            ]
+          }
         }
       ]
     }
