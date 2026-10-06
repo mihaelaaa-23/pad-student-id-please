@@ -207,14 +207,11 @@
           "script": {
             "type": "text/javascript",
             "exec": [
-              "// Lab 2, grade 10: the Gateway refuses a protected route without a token. While its",
-              "// authorization is still off (no secrets in .env) the request simply passes.",
-              "pm.test('without a token: 401 UNAUTHORIZED once authorization is on', function () {",
-              "    pm.expect([200, 401]).to.include(pm.response.code);",
-              "    if (pm.response.code === 401) {",
-              "        pm.expect(pm.response.json().error.code).to.eql('UNAUTHORIZED');",
-              "        pm.expect(pm.response.headers.get('WWW-Authenticate')).to.eql('Bearer');",
-              "    }",
+              "// Lab 2, grade 10: the Gateway refuses a protected route without a token.",
+              "pm.test('without a token: 401 UNAUTHORIZED', function () {",
+              "    pm.response.to.have.status(401);",
+              "    pm.expect(pm.response.json().error.code).to.eql('UNAUTHORIZED');",
+              "    pm.expect(pm.response.headers.get('WWW-Authenticate')).to.eql('Bearer');",
               "});"
             ]
           }
@@ -240,19 +237,15 @@
             "type": "text/javascript",
             "exec": [
               "// Lab 2, grade 10: XP is awarded by a service (Session, when a shift ends), never by a",
-              "// player. Once the Gateway's authorization is on, this request, sent with the player's own",
-              "// token, is refused. While it is off nobody is authenticated and the update goes through.",
+              "// player. This request is sent with the player's own token, so Player Service refuses it.",
+              "// The Session collection shows the allowed path: \"Moderator Received Shift XP\".",
               "const json = pm.response.json();",
-              "pm.test('xp: updated while authorization is off, 403 FORBIDDEN for a player once it is on', function () {",
-              "    pm.expect([200, 403]).to.include(pm.response.code);",
+              "pm.test('a player cannot award XP: 403 FORBIDDEN', function () {",
+              "    pm.response.to.have.status(403);",
               "});",
-              "pm.test('the body matches: the leveling formula, or the FORBIDDEN error', function () {",
-              "    if (pm.response.code === 200) {",
-              "        pm.expect(json.xp).to.eql(150);",
-              "        pm.expect(json.level).to.eql(1 + Math.floor(150 / 100));",
-              "    } else {",
-              "        pm.expect(json.error.code).to.eql('FORBIDDEN');",
-              "    }",
+              "pm.test('the error says why', function () {",
+              "    pm.expect(json.error.code).to.eql('FORBIDDEN');",
+              "    pm.expect(json.error.message).to.be.a('string');",
               "});"
             ]
           }
