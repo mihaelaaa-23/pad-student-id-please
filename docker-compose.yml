@@ -3,7 +3,7 @@ services:
   # The single entry point. No depends_on: the Gateway starts independently and
   # answers 502 BAD_GATEWAY until a service is up.
   gateway:
-    image: mihaela5/gateway:2.0.0-rc.2
+    image: mihaela5/gateway:2.0.0
     restart: unless-stopped
     ports:
       - "3000:3000"
