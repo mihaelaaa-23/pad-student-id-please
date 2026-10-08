@@ -29,6 +29,8 @@ A Discord-server-moderation game: applicants (students, professors, alumni, outs
 | [Ion Iamandii](https://github.com/ion190) | FAF-233 | Server Rules Service | University Record Service |
 | [Liviu Chirtoaca](https://github.com/D3adeYe69) | FAF-233 | Moderation Service | Discord DMs Service |
 
+The **Gateway** (added in Lab 2) is owned by [Mihaela Untu](https://github.com/mihaelaaa-23).
+
 
 ## Service Boundaries
 
@@ -97,30 +99,42 @@ Provides real-time communication between the Moderator and Junior Moderators dur
 
 It transports messages but does **not** determine whether the information shared is correct, and it does not own any applicant, credential, or rule data itself — it's purely the communication layer.
 
+### Gateway
+
+The single entry point of the system, added in Lab 2. Every REST request — from the client and between services — goes through the Gateway, which forwards it to the service that owns the resource. It also owns the concerns that belong at the edge: validating the `Authorization` header (and not forwarding it downstream), negotiating WebSocket connections by giving the client a URL to connect to Discord DMs Service directly, and enforcing its own task timeout and concurrent task limit.
+
+**Database:** none. The Gateway is stateless and holds no business data.
+
+It does **not** own any player, session, applicant, credential, rule, record, decision, or message data, and it does not make business decisions (admission, rule evaluation, scoring) — those stay with the services behind it. It also does not carry WebSocket traffic: once a connection is negotiated, the client talks to Discord DMs Service directly.
+
 ## Architecture Diagram
 
 ![Architecture](./docs/architecture.png)
 
-Services sit inside a single **Service Layer** boundary, with the Client entering only through Player Service (register/login), Server Moderation Session Service (session lifecycle), and Discord DMs (WebSocket channels) — every other service is reached only through Session or Moderation, never directly. Each service's database is drawn as a labeled cylinder next to it, color-coded MongoDB (green) vs. PostgreSQL (blue) per the legend. A second legend explains the line styles: orchestration queries (Session/Moderation calling a data service), the real-time Discord relay, the Applicant/Credential/University-Record mutual-initialization trio, and Server Rules' direct check against University Record.
+The **API Gateway** (port `3000`, Python, no database) is the single entry point of the system. The Client sends every REST request to the Gateway with an `Authorization: Bearer <token>` header; the Gateway validates it, does not forward it downstream, and routes the request to the service that owns the resource. The services sit inside a single **Service Layer** boundary and are not published to the host — only the Gateway (`:3000`) and Discord DMs' WebSocket listener (`:3008`) are. Each service's database is drawn as a labeled cylinder next to it, color-coded MongoDB (green) vs. PostgreSQL (blue).
+
+Arrows inside the Service Layer are **logical dependencies, not direct connections**: every service-to-service call also goes out through the Gateway. The pink path (① → ②) shows one example — Server Moderation Session Service calls `gateway:3000/applicant/…`, and the Gateway forwards the request to Applicant Service. The only traffic that bypasses the Gateway is the WebSocket (orange, dashed): the Client first asks the Gateway for a WebSocket URL and a short-lived ticket, then connects to Discord DMs directly. Every service, like the Gateway, enforces a task timeout and a concurrent task limit. The legend explains the remaining line styles: orchestration queries (Session/Moderation calling a data service), session checks and verdicts relayed to chat, the Applicant/Credential/University Record mutual-initialization trio (target design), and Server Rules' record check against University Record.
 
 **Service Relationships**
 
-Server Moderation Session Service acts as the central coordinator during an active shift. It queries Applicant Service for the current applicant, Credential Service to check submitted documents, Server Rules Service to evaluate the applicant against current access rules, and University Record Service to pull any hidden records needed for verification. Once a shift ends, it publishes the result to Player Service so XP and levels can be updated.
+Every relationship below is a REST call sent through the Gateway, which forwards it to the target service; no service calls another one directly.
+
+Server Moderation Session Service acts as the central coordinator during an active shift. It queries Applicant Service for the current applicant, Credential Service to check submitted documents, Server Rules Service to evaluate the applicant against current access rules, and University Record Service to pull any hidden records needed for verification. Once a shift ends, it sends the result to Player Service so XP and levels can be updated.
 This is exposed concretely through `POST /sessions/{id}/process-applicant`, which calls the real services when their URLs are configured (as they all are in the shared `docker-compose.yml`) and falls back to contract-shaped mocks when a service is unset or unreachable. The response's `sources` object says, per dependency, whether the answer was `live` or `mock`.
 
-Moderation Service independently gathers the same four services — Applicant, Credential, Server Rules, and University Record — to determine whether the Moderator's decision (Accept, Reject, Flag, or Ban) was correct under the current rules. It does not talk to Player Service or Session Service directly; it only consumes applicant-side data to produce a verdict.
+Moderation Service independently gathers the same four services — Applicant, Credential, Server Rules, and University Record — to determine whether the Moderator's decision (Accept, Reject, Flag, or Ban) was correct under the current rules. It does not talk to Player Service or Session Service; it only consumes applicant-side data to produce a verdict.
 
-Applicant Service, Credential Service, and University Record Service share a mutual initialization pattern: whichever of the three is contacted first for a new applicant creates that applicant's record and propagates the relevant data to the other two. This is why all three are connected to each other rather than routing through a single source of truth. This is the target design; in Lab 1 no service propagates records yet (see "Status in Lab 1" under Data Management).
+Applicant Service, Credential Service, and University Record Service share a mutual initialization pattern: whichever of the three is contacted first for a new applicant creates that applicant's record and propagates the relevant data to the other two. This is why all three are connected to each other rather than routing through a single source of truth. This is the target design; no service propagates records yet (see "Status in Lab 1" under Data Management).
 
-Server Rules Service and University Record Service communicate directly as well, since rule evaluation can require checking specific university records (e.g. enrollment length, prior ban status) rather than relying only on what the applicant presents.
+Server Rules Service also calls University Record Service, since rule evaluation can require checking specific university records (e.g. enrollment length, prior ban status) rather than relying only on what the applicant presents.
 
-Discord DMs Service is tied to the active session: it provides the real-time channels (`#enrollment-check`, `#faculty-check`, etc.) that Junior Moderators use to share findings during a shift, and it exchanges session context bidirectionally with Server Moderation Session Service. Moderation Service also communicates with Discord DMs Service, since the Moderator's final decision needs to be relayed back to the team through chat.
+Discord DMs Service is tied to the active session: it provides the real-time channels (`#enrollment-check`, `#faculty-check`, etc.) that Junior Moderators use to share findings during a shift, and it checks sessions against Server Moderation Session Service. Moderation Service also calls Discord DMs Service, since the Moderator's final decision needs to be relayed back to the team through chat. Players reach these channels over the WebSocket described above, not through the Gateway.
 
-Player Service sits at the edge of this graph — it only receives shift outcomes from Session Service and has no direct relationship with the applicant-side services (Applicant, Credential, Server Rules, University Record) or with Moderation Service.
+Player Service sits at the edge of this graph — it only receives shift outcomes from Session Service and has no relationship with the applicant-side services (Applicant, Credential, Server Rules, University Record) or with Moderation Service.
 
 ## Tech Stack & Communication Patterns
 
-> Languages used by the team: **Node.js** + **Go**. Note: Python is our team's "banned language" (a language known by everyone on the team, excluded from use in any private microservice per the assignment rules), so it is not used in any service below.
+> Languages used by the team: **Node.js** + **Go** for the 8 services, and **Python** for the Gateway. Python is our team's "banned language" (a language known by everyone on the team), so it is excluded from all 8 private microservices per the assignment rules. Lab 2 requires the Gateway to be written in the banned language, which makes it the one Python service.
 
 **Node.js**
 
@@ -129,6 +143,10 @@ Used for Player Service, Server Moderation Session Service, Applicant Service, C
 **Go**
 
 Used for Moderation Service and Discord DMs Service. Moderation Service calls four other services per decision and must stay responsive under concurrent sessions — goroutines handle that fan-out cheaply. Discord DMs Service keeps many per-channel WebSocket connections open per shift; Go's goroutine-per-connection model is built for exactly that.
+
+**Python**
+
+Used only for the Gateway, as Lab 2 requires. Its framework and libraries are documented in the Gateway's own README.
 
 **Databases**
 
@@ -144,6 +162,8 @@ Following the database-per-service rule below, each service picked PostgreSQL or
 | Credential Service | MongoDB | Credential documents vary by type |
 | Server Rules Service | MongoDB | Arbitrarily nested rule conditions |
 | Discord DMs Service | MongoDB | High-write, document-shaped chat messages |
+
+The Gateway has no database (see its Service Boundaries entry).
 
 ## Communication Contract
  
@@ -162,6 +182,95 @@ This has a few direct consequences for how the system behaves:
  
 ### Endpoints
  
+#### Gateway
+
+The single entry point of the system (Lab 2). Clients call `http://localhost:3000/<prefix>/<service path>`; the Gateway strips the prefix, forwards the request to the service that owns it, and returns that service's status and body unchanged. Response headers pass through too, except hop-by-hop headers and `Content-Length`, `Content-Encoding`, `Date` and `Server`, which the Gateway sets itself; it also adds `X-Request-Id`.
+
+| Prefix | Service | Upstream in docker-compose (env var) |
+|---|---|---|
+| `/player` | Player Service | `http://player-service:3001` (`PLAYER_SERVICE_URL`) |
+| `/session` | Server Moderation Session Service | `http://session-service:3002` (`SESSION_SERVICE_URL`) |
+| `/applicant` | Applicant Service | `http://applicant-service:3003` (`APPLICANT_SERVICE_URL`) |
+| `/credential` | Credential Service | `http://credential-service:3004` (`CREDENTIAL_SERVICE_URL`) |
+| `/server-rules` | Server Rules Service | `http://server-rules-service:3005` (`RULES_SERVICE_URL`) |
+| `/university-record` | University Record Service | `http://university-record-service:3006` (`UNIVERSITY_RECORD_SERVICE_URL`) |
+| `/moderation` | Moderation Service | `http://moderation-service:3007` (`MODERATION_SERVICE_URL`) |
+| `/discord-dms` | Discord DMs Service | `http://discord-dms-service:3009` (`DISCORD_DMS_SERVICE_URL`) — its REST port; `3008` serves only the WebSocket |
+
+| Method | Path | Request | Response |
+|---|---|---|---|
+| GET | /status | — | `{service: "gateway", status: string, time: string}` |
+| POST | /ws/negotiate | `{sessionId: string, channel: string, playerId?: string}` | `{url: string, ticket: string, expiresAt: string}` |
+| any | /{prefix}/{service path} | forwarded unchanged | the service's response, unchanged |
+
+Notes for callers:
+
+- Example: `GET /applicant/applicants/42` is forwarded as `GET /applicants/42` to Applicant Service. `GET /status` is the Gateway's own; a service's status is `/<prefix>/status`.
+- `Authorization` is never forwarded to a service. Client-sent `X-Player-Id`, `X-Caller-*`, `Forwarded` and `X-Forwarded-*` headers are removed — only the Gateway sets them (`X-Player-Id` / `X-Caller-*` after authorization), so services can trust them.
+- Authorization (Lab 2, grade 10). The Gateway is the only place a token is checked; services never see `Authorization` and trust the headers the Gateway sets.
+  - **Public routes**, no token needed: `GET /status`, `GET /<prefix>/status`, `POST /player/players/register` and `POST /player/players/login`. Every other request needs `Authorization: Bearer <token>`.
+  - **A player token** is the `token` returned by `POST /player/players/login`: a JWT signed with HS256 and `JWT_SECRET`, which only Player Service (signs) and the Gateway (verifies) hold. Claims: `sub` (the `playerId`), `iss` (`"player-service"`), `iat` and `exp` (Unix seconds; `exp` is 24 hours after `iat`). The Gateway checks the signature, `iss` and `exp`, then forwards the request with `X-Player-Id: <sub>` and `X-Caller-Type: player`. It accepts only `HS256` and rejects any other `alg`, including `none`, rather than taking the algorithm from the token header. `exp` is accepted up to 5 seconds late, for clock skew between containers. `JWT_SECRET` is at least 32 characters.
+  - **A service token** is for service-to-service calls, which also go through the Gateway and carry no player. It is one shared secret, `SERVICE_TOKEN`, set from `.env` on the Gateway and on every service; a service sends it as `Authorization: Bearer <SERVICE_TOKEN>` on every outgoing call. The Gateway forwards such a request with `X-Caller-Type: service` and no `X-Player-Id`. A service call therefore carries no verified player: a player id passed inside the request itself (for example University Record's `requestingPlayerId`) is still whatever the calling service sent.
+  - Anything else (no header, a scheme other than `Bearer`, a malformed, wrongly signed or expired token, another issuer) is answered `401 UNAUTHORIZED` with `WWW-Authenticate: Bearer` and is not forwarded. The `401` is decided before the request takes one of the Gateway's concurrency slots, so requests without a token cannot fill them. For a calling service that is a refused lookup (a configuration error, `502 DEPENDENCY_REFUSED`), never a reason to fall back to a mock.
+  - The Gateway authenticates; it does not decide what a caller may do. A service that needs to (for example "only the author may delete this message") uses `X-Player-Id` and `X-Caller-Type`, which a client cannot forge because the Gateway removes client-sent copies.
+  - Rollout: while `JWT_SECRET` is unset on the Gateway nothing is enforced and requests pass as before, so Player Service, the other services and the Postman collections can adopt this independently. `JWT_SECRET` and `SERVICE_TOKEN` are set together: the Gateway refuses to start when only one of them is set, and logs a warning at startup when neither is, so a stack without authentication is never silent. In the shared stack both are set, and `docker compose` refuses to start without them. They must be two different values (the Gateway refuses to start when they are equal), so a leaked service token cannot be used to sign a player token. Every Postman collection then registers and logs in a player through the Gateway first and sends that token on its requests.
+- Every forwarded request carries `X-Request-Id` (kept if the client sent one, otherwise generated, and returned in the response), plus `X-Forwarded-Prefix` and `X-Forwarded-For`.
+- The Gateway waits `UPSTREAM_TIMEOUT_MS` (default `10000`) for a service before giving up.
+- Timeout budget of the shared stack (Lab 2, grade 8). A caller must never give up on work the callee is still doing, so on every hop the caller's outgoing call timeout is larger than the callee's `TASK_TIMEOUT_MS`, and a service's own `TASK_TIMEOUT_MS` is larger than its outgoing call timeout. Values are what `docker-compose.yml` sets; an image run without them falls back to its own defaults.
+
+  | Service | Outgoing call timeout | `TASK_TIMEOUT_MS` |
+  |---|---|---|
+  | Player, University Record (leaves) | — | `2000` |
+  | Server Rules | `2500` (to University Record) | `3000` |
+  | Applicant | `2500` (to University Record) | `3000` |
+  | Credential | `3500` (to Applicant) | `4000` |
+  | Server Moderation Session | `4500` per call | `8000` |
+  | Moderation | `4500` per call | `8000` |
+  | Discord DMs, REST | `8500` (to Session) | `9000` |
+  | Gateway | `10000` (`UPSTREAM_TIMEOUT_MS`) | — |
+
+  One hop is deliberately outside this rule. Moderation's call to Discord DMs, which announces a verdict in chat, is bounded by `3000` rather than by Discord DMs' `9000` cap. It is best-effort: the decision is already stored by the time it runs, a failure only reports `announcedInChat: false`, and nothing is retried, so giving up early costs an announcement rather than a decision. Worth knowing: giving up does not undo work already done. Discord DMs stores a message before broadcasting it, so a verdict reported as not announced may still have reached the channel.
+
+  `TASK_TIMEOUT_MS` is a cap, not a sum: Session and Moderation make several calls per request, so two slow dependencies can use up `8000` and the service answers `504 TASK_TIMEOUT` itself. The Gateway's `10000` stays above every service's cap, so a client sees the service's own `504 TASK_TIMEOUT` rather than `504 GATEWAY_TIMEOUT`. Services that do not implement grade 8 yet adopt their row when they do.
+- Errors produced by the Gateway itself use the shared envelope:
+
+  | Status | Code | When |
+  |---|---|---|
+  | `401` | `UNAUTHORIZED` | a non-public route was called without a valid `Authorization: Bearer` token (missing, malformed, wrongly signed, expired, or another issuer); sent with `WWW-Authenticate: Bearer`, the request is not forwarded |
+  | `403` | `FORBIDDEN` | `POST /ws/negotiate` was called with the service token: a service has no player to issue a ticket for. This is the one route the Gateway answers itself, so it is the only place the Gateway produces this code; a `403` on a forwarded route is the service's own |
+  | `404` | `ROUTE_NOT_FOUND` | the first path segment is not a known prefix |
+  | `502` | `BAD_GATEWAY` | the service is unreachable |
+  | `503` | `CONCURRENCY_LIMIT_REACHED` | `MAX_CONCURRENT_TASKS` requests are already in progress; sent with `Retry-After: 1`, the request is not forwarded |
+  | `503` | `WS_NEGOTIATION_DISABLED` | `POST /ws/negotiate` was called while `WS_TICKET_SECRET` is unset. Unlike `CONCURRENCY_LIMIT_REACHED`, retrying never helps: it is a configuration state, not load. Like the pair on `502`, the two `503`s are told apart by their code |
+  | `504` | `GATEWAY_TIMEOUT` | the service did not answer within `UPSTREAM_TIMEOUT_MS` |
+
+  Errors produced by a service (e.g. its `404 NOT_FOUND` for a missing resource) pass through unchanged, so `ROUTE_NOT_FOUND` always means a wrong prefix, never a missing resource.
+
+  Concurrent task limit (Lab 2, grade 8): every forwarded request holds one slot until the service has answered, and that includes service-to-service calls, which also go through the Gateway. One client request therefore holds several slots at once: one per hop in progress, nested hops included. During `process-applicant` that peaks at about 7 (Session's own request plus Credential → Applicant → University Record and Server Rules → University Record, each hop holding its own slot), about 8 when the request comes in through Discord DMs. So the Gateway's limit must be far above a single service's `MAX_CONCURRENT_TASKS` (`50`), or the outer requests would fill the slots and the inner calls of the same requests would be refused. The variable is `MAX_CONCURRENT_TASKS` in the Gateway image (default `500`), set in compose from `GATEWAY_MAX_CONCURRENT_TASKS`, next to `GATEWAY_UPSTREAM_TIMEOUT_MS`. Rule: Gateway limit ≥ a service's limit × the hops one client request holds at once, with margin; here 50 × 8 = 400 < 500. `/status` is exempt, so the healthcheck keeps answering under load. The Gateway has no task timeout of its own: `UPSTREAM_TIMEOUT_MS` already bounds every forwarded request. A `503 CONCURRENCY_LIMIT_REACHED` from the Gateway and one from a service mean the same thing for a caller (overloaded, retry later or fall back to a mock), so they share the code. A Gateway `503` on an inner hop reaches the calling service as an ordinary `5xx`, so that service falls back to a mock; it is not a `DEPENDENCY_REFUSED`.
+
+  Besides these, the Gateway answers `404 NOT_FOUND` for a path with no service prefix at all (e.g. `GET /`) and `500 INTERNAL_ERROR` for an unexpected error of its own.
+- The Discord DMs WebSocket is not proxied: clients connect to it directly after negotiating with the Gateway. A long-lived socket proxied through the Gateway would hold one of its slots for a whole shift, so the Gateway authorises the connection up front and then steps out of the way.
+
+  **Negotiating a socket.** `POST /ws/negotiate` with `{sessionId, channel}` answers `{url, ticket, expiresAt}`. A missing or empty `sessionId` or `channel` is `422 VALIDATION_FAILED`, as everywhere else in this contract. The call is an ordinary request through the Gateway, so it counts against `MAX_CONCURRENT_TASKS` like any other; only the socket it authorises stays outside. The client then opens `<url>?ticket=<ticket>`, which is a direct connection to Discord DMs Service on its published WebSocket port. `url` is the address the *client* can reach, from the Gateway's `DISCORD_DMS_WS_PUBLIC_URL` (in the shared stack `ws://localhost:3008`) — not the in-network name, which a client outside the compose network cannot resolve.
+
+  **The ticket** is `<payload>.<signature>`, both base64url without padding:
+
+  - `payload` is the JSON `{"sessionId": string, "channel": string, "playerId": string, "exp": int}`, where `exp` is a Unix timestamp in seconds, 60 seconds after issue.
+  - `signature` is `HMAC-SHA256(payload, WS_TICKET_SECRET)` over the base64url payload text exactly as it appears in the ticket, so both sides sign the same bytes without re-serialising the JSON.
+  - `WS_TICKET_SECRET` is shared by the Gateway and Discord DMs Service through the environment and is never sent to a client.
+
+  **The player comes from the validated token**, never from the request body. `/ws/negotiate` is a protected route like any other: it needs a player token, and the ticket is issued for that token's `sub`, the same value the Gateway forwards as `X-Player-Id`. A `playerId` in the body is optional and ignored, so nobody can ask for a ticket in another player's name, and the ticket proves who is connecting. The service token is answered `403 FORBIDDEN`: a service has no player to put in a ticket.
+
+  While the Gateway's authorisation is off (`JWT_SECRET` unset, the rollout state described above), nobody is authenticated. Only then is `playerId` read from the body, where it is required (`422 VALIDATION_FAILED` when missing or empty), and a ticket proves only that the request went through the Gateway, not who sent it.
+
+  **A ticket is bound to one channel.** Discord DMs rejects it unless `sessionId`, `channel` and `playerId` all match the connection being opened, so a ticket for `#general-mod-chat` cannot open `#faculty-check`. A client opening several channels negotiates once per channel.
+
+  **Discord DMs answers `401 UNAUTHORIZED`** when the ticket is missing, malformed, signed with another secret, expired, or issued for a different session, channel or player. That answer is the HTTP response to the upgrade handshake, so it arrives before any socket is opened. Once the ticket is accepted, the channel-access rules apply unchanged: a player who was never assigned the channel still gets `403 FORBIDDEN`. The ticket settles *who is connecting*; the roster still settles *what they may read*.
+
+  **A ticket may be used more than once** inside its 60 seconds. It is not a nonce, and nothing tracks which tickets have been spent: the short life is what bounds the damage of a leaked one. The signature is compared in constant time, and `exp` is allowed a few seconds of leeway so a small clock difference between containers does not refuse a ticket that was just issued.
+
+  **While `WS_TICKET_SECRET` is unset**, Discord DMs keeps accepting `?playerId=` as before and the Gateway answers `503 WS_NEGOTIATION_DISABLED`. That is the state before this is rolled out, so the two services can ship their halves independently. Because that fallback is silent from the outside, Discord DMs logs a warning at startup when the secret is missing, and the shared `docker-compose.yml` sets it on both services from `.env` — a forgotten secret should be visible, not merely permissive.
+
 #### Player Service
 | Method | Path | Request | Response |
 |---|---|---|---|
@@ -175,8 +284,11 @@ This has a few direct consequences for how the system behaves:
 
 >Notes for callers:
 >- `POST /players/login` returns `401 UNAUTHORIZED` for an unknown username or wrong password.
+>- The `token` from `POST /players/login` is a JWT (HS256, signed with `JWT_SECRET`) with the claims `sub` (the `playerId`), `iss` (`"player-service"`), `iat` and `exp` (24 hours later). Clients send it to the Gateway as `Authorization: Bearer <token>`; the Gateway validates it and does not forward it, so Player Service never receives it back. See "Authorization" in the Gateway notes.
 >- A duplicate username on `POST /players/register` returns `409 CONFLICT`; unknown IDs return `404 NOT_FOUND`.
 >- Missing register fields, or a non-numeric `xpGained`, return `422 VALIDATION_FAILED`.
+>- Who may call what (Lab 2, grade 10), decided from the `X-Caller-Type` and `X-Player-Id` headers the Gateway sets after it validated the token: `PATCH /players/{id}/xp` is for services only (Session awards XP when a shift ends), so a player token gets `403 FORBIDDEN`; `DELETE /players/{id}` deletes the caller's own account, so a player token for another player, or the service token, gets `403 FORBIDDEN`. The `403` is decided before validation and before the player is looked up, so it does not reveal whether an id exists. While the Gateway's authorization is off those headers are absent and nothing is enforced, as before.
+>- Player Service cannot tell by itself whether the Gateway's authorization is on, so by default a request without the caller headers is let through (the rule above). `REQUIRE_CALLER_HEADERS=true` closes that: every route except `POST /players/register`, `POST /players/login` and `GET /status` then answers `401 UNAUTHORIZED` when `X-Caller-Type` is missing, because such a request did not pass the Gateway's check (for example, it came from inside the compose network straight to port 3001). It closes the case "a request that skipped the Gateway carries no headers", not every request that skipped it: the headers are not signed, so this still relies on the compose network holding only our own services, with the Gateway the only one published for REST. It is `false` by default and is set to `true` in compose in the same change that sets `JWT_SECRET` and `SERVICE_TOKEN` on the Gateway; with the Gateway's authorization off it must stay `false`, or every protected route would be refused.
 >- Level is `1 + floor(xp / 100)`.
 >- Errors come back as `{error: {code: string, message: string}}`.
  
@@ -187,7 +299,7 @@ This has a few direct consequences for how the system behaves:
 | POST | /sessions/{id}/join | `{playerId: string, role: "moderator" \| "junior"}` | `{sessionId: string, role: string, status: string}` |
 | GET | /sessions/{id} | — | `{sessionId: string, currentApplicantId: string, processedCount: int, score: int, status: string}` |
 | POST | /sessions/{id}/end | — | `{sessionId: string, result: string, score: int}` |
-| POST | /sessions/{id}/process-applicant | — | `{sessionId: string, processedCount: int, currentApplicantId: string, applicant: object, credentialCheck: object, rulesCheck: object, universityRecords: object, sources: {applicant, credentialCheck, rulesCheck, universityRecords: "live" \| "mock"}}` |
+| POST | /sessions/{id}/process-applicant | — | `{sessionId: string, processedCount: int, currentApplicantId: string, applicant: object, credentialCheck: object, rulesCheck: object, universityRecords: object, sources: {applicant, credentialCheck, rulesCheck, universityRecords: "live" \| "mock"}}` — `502` with `DEPENDENCY_REFUSED` when a dependency refuses the request |
 | GET | /status | — | `{status: string, database: string}` — `503` with `status: "degraded"` and `database: "down"` when PostgreSQL is unreachable |
 | DELETE | /sessions/{id} | — | `{sessionId: string, deleted: boolean}` — `404 NOT_FOUND` if unknown |
 
@@ -197,6 +309,10 @@ Notes for callers:
 - `POST /sessions/{id}/join` returns `409 CONFLICT` when the player is already in the session, when a second moderator tries to join, or when the session has ended. An unknown `role` is `422`.
 - `POST /sessions/{id}/process-applicant` on an ended session returns `409 CONFLICT`.
 - `process-applicant` generates an applicant through Applicant Service, creates its credential with `POST /credentials/{applicantId}` (reading it with `GET` if it already exists), evaluates rules with `POST /rules/evaluate` sending the full applicant, and reads records with `GET /records/{applicantId}?requestingPlayerId=<moderatorId>`.
+- In the shared stack these calls go through the Gateway. `sources` reports, per dependency, `live` for a real answer — including University Record's `404 NOT_FOUND`, returned as `{applicantId, fields: {}}` (no record for this applicant) — and `mock` when Session fell back to a mock (dependency unreachable, timed out, `502 BAD_GATEWAY`, `504 GATEWAY_TIMEOUT`, other `5xx`) or when the dependency marked its own answer with `X-Data-Source: mock`.
+- A refused request — `404 ROUTE_NOT_FOUND` (wrong Gateway prefix), `401`, `403`, `422`, or a `DEPENDENCY_REFUSED` error from the dependency — is a configuration error, not an outage: `process-applicant` answers `502` with code `DEPENDENCY_REFUSED` and a message naming the dependency, nothing is stored and `processedCount` does not change. On `end`, XP updates are not retried: a refused one is logged as an error, and an unreachable, timed-out or failing Player Service (or an unknown player, `404 NOT_FOUND`) is logged as a warning. In both cases that XP is lost and the request still succeeds, because the shift has already ended.
+- Session decides on the error `code`, not only the status: `502 BAD_GATEWAY` is the Gateway saying a service is unreachable (→ mock), `502 DEPENDENCY_REFUSED` is a service refusing on purpose (→ no mock).
+- Session always sends `core` with `POST /credentials/{applicantId}`, so Credential never has to look the applicant up; a `404 NOT_FOUND` there is not expected and would be handled like any other error (mock).
 - Missing or invalid fields return `422 VALIDATION_FAILED`.
 - Errors come back as `{error: {code: string, message: string}}`.
  
@@ -230,11 +346,20 @@ Notes for callers (Applicant Service, Credential Service):
 - `core` in `POST /credentials/{applicantId}` is optional. When it is absent, Credential Service fetches the applicant from Applicant Service and answers `404` if that applicant does not exist; it never invents a person.
 - `PATCH` never accepts `applicantId` or `studentId`. They are the shared key across Applicant, Credential and University Record, so they are immutable after creation and sending either is `422`.
 - `DELETE` is local to the service. It does not cascade to the other two services in Lab 1.
-- Errors come back as `{error: {code: string, message: string, details?: object[]}}`, with codes `NOT_FOUND`, `CONFLICT`, `VALIDATION_FAILED`, `INTERNAL_ERROR` and statuses `201` create, `404` unknown id, `409` duplicate id, `422` validation, `500` internal. Every service in this contract uses the same `{error: {code: string, message: string}}` envelope, and every service uses `422` for validation failures.
+- `GET /applicants/{id}` for a UUID that Applicant Service does not hold asks University Record Service for it, as `GET /records/{id}?requestingPlayerId=applicant-service` (the service asks on its own behalf, not a player's; University Record's `program` and `studyYear` become `major` and `year`). The result:
+  - the record exists → the applicant is stored and returned (`200`)
+  - University Record answers `404 NOT_FOUND` → `404`
+  - the lookup is refused (`404 ROUTE_NOT_FOUND` from the Gateway, `401`, `403`, `422`, or `502 DEPENDENCY_REFUSED` from the service) → `502 DEPENDENCY_REFUSED`, because a wrong Gateway prefix or a rejected token is a configuration error that a mock would hide
+  - University Record is unreachable, times out or answers any other `5xx` (including the Gateway's `502 BAD_GATEWAY`) → `200` built from a mock, with header `X-Data-Source: mock`, and **not stored**
+- `POST /credentials/{applicantId}` without `core` asks Applicant Service with the same rules: `404` if the applicant does not exist, `502 DEPENDENCY_REFUSED` if the lookup is refused (including Applicant Service's own `502 DEPENDENCY_REFUSED`), and a mock holder if Applicant Service is down or itself answered `X-Data-Source: mock`. A credential issued for a mock holder is stored, but the `201` carries `X-Data-Source: mock`.
+- `502 DEPENDENCY_REFUSED` and the Gateway's `502 BAD_GATEWAY` share the status but not the meaning: `DEPENDENCY_REFUSED` is a configuration error further down the chain (do not mock, surface it), `BAD_GATEWAY` means the service is unreachable (a mock fallback is fine). Callers must decide by `error.code`, not by status.
+- Every route except `/health` and `/status` runs under a task timeout and a concurrent task limit (Lab 2, grade 8). A request still running after `TASK_TIMEOUT_MS` (in the shared stack `3000` for Applicant and `4000` for Credential, see the timeout budget; `3000` in the image if unset) is answered `504 TASK_TIMEOUT` and its outgoing calls are cancelled; outgoing calls give up after `HTTP_TIMEOUT_MS` (in the stack `2500` for Applicant → University Record and `3500` for Credential → Applicant; `2000` in the image if unset); a request arriving while `MAX_CONCURRENT_TASKS` (`50`, in the stack and in the image) are already running is answered `503 CONCURRENCY_LIMIT_REACHED` with `Retry-After: 1`, without being processed. Both mean the service is overloaded or slow, not that the request is wrong: a caller may retry later or fall back to a mock, like for any other `5xx`. `504 TASK_TIMEOUT` (the service gave up on its own work) is different from the Gateway's `504 GATEWAY_TIMEOUT` (the service did not answer in time).
+- `X-Data-Source: mock` is the only signal that a response contains invented data; callers that must not act on invented data (Session, Moderation) can check it. It is absent on every normal response.
+- Errors come back as `{error: {code: string, message: string, details?: object[]}}`, with codes `NOT_FOUND`, `CONFLICT`, `VALIDATION_FAILED`, `DEPENDENCY_REFUSED`, `CONCURRENCY_LIMIT_REACHED`, `TASK_TIMEOUT`, `INTERNAL_ERROR` and statuses `201` create, `404` unknown id, `409` duplicate id, `422` validation, `502` refused dependency lookup, `503` concurrent task limit reached, `504` task timeout, `500` internal. Every service in this contract uses the same `{error: {code: string, message: string}}` envelope, and every service uses `422` for validation failures.
  
 #### Server Rules Service
 
-**Base URL:** `http://localhost:3005`
+**Base URL:** `http://localhost:3000/server-rules`
 
 | Method | Endpoint          | Request                       | Response                    |
 | ------ | ----------------- | ----------------------------- | --------------------------- |
@@ -262,7 +387,18 @@ The service requests university information from the University Record Service u
 GET /records/{applicantId}?requestingPlayerId=server-rules-service
 ```
 
-The University Record Service is configured through `UNIVERSITY_RECORD_SERVICE_URL`. If the URL is not configured, or the University Record Service is unreachable, Server Rules Service automatically falls back to its built-in mock university record data. A non-success HTTP response from the University Record Service is treated as an error.
+The University Record Service is configured through `UNIVERSITY_RECORD_SERVICE_URL`
+(in compose, the Gateway prefix `http://gateway:3000/university-record`). The call
+times out after `2500` ms and carries `Authorization: Bearer <SERVICE_TOKEN>` when
+`SERVICE_TOKEN` is set. The response is handled by its error code:
+
+- `200`: the record is used.
+- `404 NOT_FOUND`: no university record; rules that need it are reported as unevaluable.
+- `502 BAD_GATEWAY`, `504 GATEWAY_TIMEOUT`, any other `5xx`, a timeout or a network
+  error: the built-in mock record is used.
+- `502 DEPENDENCY_REFUSED` and refusals (`404 ROUTE_NOT_FOUND`, `401`, `403`, `422`):
+  no mock; `POST /rules/evaluate` answers `502 DEPENDENCY_REFUSED`.
+- `UNIVERSITY_RECORD_SERVICE_URL` unset: the mock record is used.
 
 The current Lab 1 rule set includes:
 
@@ -276,7 +412,7 @@ The Server Rules Service does not make the final admission decision; it only rep
 
 #### University Record Service
 
-**Base URL:** `http://localhost:3006`
+**Base URL:** `http://localhost:3000/university-record`
 
 | Method   | Endpoint                 | Request                              | Response                    |
 | -------- | ------------------------ | ------------------------------------ | --------------------------- |
@@ -298,19 +434,36 @@ Example response:
 
 ```json
 {
-  "id": 1,
-  "applicant_id": "applicant-001",
-  "student_id": "UTM-2026-001",
-  "university": "Technical University of Moldova",
-  "faculty": "Faculty of Computers, Informatics and Microelectronics",
-  "program": "Software Engineering",
-  "study_year": 4,
-  "enrollment_status": "active",
-  "average_grade": 9.25
+  "applicantId": "applicant-001",
+  "fields": {
+    "studentId": "FCIM-261847",
+    "name": "Ion Popescu",
+    "university": "Technical University of Moldova",
+    "faculty": "FAF",
+    "program": "Software Engineering",
+    "studyYear": 4,
+    "role": "student_faf",
+    "status": "active",
+    "averageGrade": 9.25,
+    "previouslyBanned": false,
+    "isEnrolled": true
+  }
 }
 ```
 
+All API response fields use camelCase. Database column names use snake_case internally and are not exposed by the API.
+
+The University Record `fields` object includes:
+
+* `isEnrolled`: boolean indicating whether the person is currently enrolled as a student. This is distinct from `status`, which represents the person's overall university status.
+* `previouslyBanned`: boolean indicating whether the applicant has previously been banned from the moderated Discord server. This is the same ban-history value used by Server Rules Service for the `NO_PREVIOUS_BAN` rule. The field is always present as a boolean, including for non-student records.
+
+For a University Record that exists for a non-student, `isEnrolled` is `false`. For example, a university staff member can have `status: "active"` while `isEnrolled: false`, because `status` describes overall university status while `isEnrolled` specifically describes current student enrollment.
+
+An applicant with no University Record is still returned as `404 NOT_FOUND`; the service does not invent `false` values for a missing record.
+
 The service uses PostgreSQL with a persistent Docker volume.
+
 
 #### Moderation Service
 | Method | Path | Request | Response |
@@ -328,7 +481,15 @@ Notes for callers:
 - `decision` is `accept`, `reject`, `flag` or `ban`.
 - A second `POST /moderation/decide` for the same applicant in the same session is `409`.
 - `violatedRules` carries the rule ids returned by Server Rules Service, the credential issue codes prefixed with `credential: `, and record findings prefixed with `record: `.
-- Errors come back as `{error: {code: string, message: string}}`.
+- Every outgoing call carries `Authorization: Bearer <SERVICE_TOKEN>` when `SERVICE_TOKEN` is set (Lab 2, grade 10). This service never checks a token itself: the Gateway is the only place one is verified, and it strips the header before forwarding. A dependency answering `401` is a refused lookup, so the decision is answered `502 DEPENDENCY_REFUSED` rather than scored on a mock.
+- Every route except `/status` runs under a task timeout and a concurrent task limit (Lab 2, grade 8). A request still running after `TASK_TIMEOUT_MS` (`8000` in the shared stack and in the image) is answered `504 TASK_TIMEOUT` and its outgoing calls are cancelled; those calls give up on their own after `HTTP_TIMEOUT_MS` (`4500`). A request arriving while `MAX_CONCURRENT_TASKS` (`50`) are already running is answered `503 CONCURRENCY_LIMIT_REACHED` with `Retry-After: 1`, without being processed. `TASK_TIMEOUT_MS` is a cap, not a sum: a decision calls four services at once, so two slow dependencies can use it up between them. The service refuses to start if `HTTP_TIMEOUT_MS` is not below `TASK_TIMEOUT_MS`.
+- `sources` reports, per dependency, `live` for a real answer and `simulated` when the mock took over. The evidence is gathered through the Gateway, so Moderation decides on the error `code` rather than the status alone:
+  - a refused lookup — `404 ROUTE_NOT_FOUND` (wrong Gateway prefix), `401`, `403`, `422`, or `502 DEPENDENCY_REFUSED` — is a configuration error, not an outage. No mock takes over and the decision is answered `502 DEPENDENCY_REFUSED` without being scored or stored.
+  - a dependency that is unreachable, times out, or answers `502 BAD_GATEWAY`, `504 GATEWAY_TIMEOUT`, `503 CONCURRENCY_LIMIT_REACHED` or any other `5xx` is replaced by the simulated answer, and `sources` says so.
+  - University Record's `404 NOT_FOUND` is a real answer, not a failure: the records are read as `fields: {}`, the source stays `live`, and the rules that need those fields simply do not fire. Nothing is invented for an applicant with no record.
+- `GET /records/{applicantId}` is always asked with a `requestingPlayerId`: the moderator from `decidedBy`, or `moderation-service` when the decision names none.
+- Every outgoing call carries the caller's `X-Request-Id`, so one client request can be followed across the services it touches.
+- Errors come back as `{error: {code: string, message: string}}`, with codes `NOT_FOUND`, `CONFLICT`, `VALIDATION_FAILED`, `DEPENDENCY_REFUSED` and `INTERNAL_ERROR`.
  
 #### Discord DMs Service
 | Method | Path | Request | Response |
@@ -349,12 +510,16 @@ Notes for callers:
 | GET | /sessions/<wbr>{id}/<wbr>channels/<wbr>{channel}/<wbr>messages/<wbr>{messageId} | `?playerId=string` | the message shape |
 | PATCH | /sessions/<wbr>{id}/<wbr>channels/<wbr>{channel}/<wbr>messages/<wbr>{messageId} | `{senderId: string, content: string}` | the message shape |
 | DELETE | /sessions/<wbr>{id}/<wbr>channels/<wbr>{channel}/<wbr>messages/<wbr>{messageId} | `?playerId=string` | — (`204`, no body) |
-| WS | /ws/<wbr>sessions/<wbr>{id}/<wbr>channels/<wbr>{channel} | `?playerId=string`, then `{senderId: string, content: string}` per message | `{senderId: string, content: string, timestamp: string}` to every listener on the channel |
+| WS | /ws/<wbr>sessions/<wbr>{id}/<wbr>channels/<wbr>{channel} | `?ticket=string` (or `?playerId=string` while `WS_TICKET_SECRET` is unset), then `{senderId: string, content: string}` per message | `{senderId: string, content: string, timestamp: string}` to every listener on the channel |
 
 Notes for callers:
 
 - `role` is `moderator` or `junior`. A moderator reaches every channel of the session; a junior moderator needs at least one channel in `channels` and only reaches those.
 - The message endpoints and the WebSocket act on behalf of a player (`playerId`, or `senderId` when posting or editing): `422` when it is missing, `404` when the session has no such channel, `403` when the player was not assigned it.
+- The session check carries `Authorization: Bearer <SERVICE_TOKEN>` when `SERVICE_TOKEN` is set (Lab 2, grade 10). This service never checks a token itself: the Gateway is the only place one is verified. A `401` from the Session Service is a refused lookup, answered `502 DEPENDENCY_REFUSED` rather than skipping the check.
+- Every REST route except `/status` runs under a task timeout and a concurrent task limit (Lab 2, grade 8). A request still running after `TASK_TIMEOUT_MS` (`9000` in the shared stack and in the image) is answered `504 TASK_TIMEOUT` and its outgoing calls are cancelled; the session check gives up on its own after `HTTP_TIMEOUT_MS` (`8500`). A request arriving while `MAX_CONCURRENT_TASKS` (`50`) are already running is answered `503 CONCURRENCY_LIMIT_REACHED` with `Retry-After: 1`, without being processed.
+- **Neither limit applies to the WebSocket.** A socket is open for a whole shift, so a task timeout would close every connection the moment it fired, and fifty open sockets would use up the concurrent limit and leave no room for REST. This is why the service serves the socket and REST on separate ports: the limits wrap the REST listener and the WebSocket listener is left bare.
+- When `WS_TICKET_SECRET` is set, the WebSocket takes its player from the `?ticket=` issued by the Gateway rather than from `?playerId=`, and answers `401 UNAUTHORIZED` for a ticket that is missing, malformed, wrongly signed, expired, or issued for another session, channel or player. See the Gateway's negotiation section for the ticket format.
 - A message is `403` to edit unless `senderId` is its author, and `403` to delete unless the player is its author or the session's moderator.
 - `/status` answers `503` with `status: "degraded"` when MongoDB is unreachable.
 - `POST /sessions/{id}/bootstrap` creates the four default channels and is safe to call twice.
@@ -362,7 +527,10 @@ Notes for callers:
 - Renaming a channel keeps its id, its messages and its access grants. Deleting a channel deletes its messages.
 - `POST /sessions/{id}/members` replaces the player's assignment when called again.
 - Messages come back oldest first. A message posted over HTTP is also sent to every WebSocket listener on the channel, and every message is stored before it is sent.
-- `POST /sessions/{id}/bootstrap` and `POST /sessions/{id}/members` answer `404` when `SESSION_SERVICE_URL` is set and Server Moderation Session Service does not know that session. With it unset the check is skipped, and a Session Service that is unreachable does not block the request.
+- `POST /sessions/{id}/bootstrap`, `POST /sessions/{id}/channels` and `POST /sessions/{id}/members` check the shift against Server Moderation Session Service when `SESSION_SERVICE_URL` is set. The check runs after the request body is validated, so a malformed body is still `422`. With the variable unset the check is skipped entirely.
+- Only Session Service's own `404 NOT_FOUND` means the shift does not exist; the request is then answered `404` with code `NOT_FOUND`. A refused lookup — `404 ROUTE_NOT_FOUND` from the Gateway (wrong prefix), `401`, `403`, `422`, or `502 DEPENDENCY_REFUSED` — is a configuration error, not a missing shift, and is answered `502` with code `DEPENDENCY_REFUSED`.
+- The check is skipped only when Session Service is unreachable: a network error, a timeout, `502 BAD_GATEWAY`, `504 GATEWAY_TIMEOUT` or any other `5xx`, including the Gateway's `503 CONCURRENCY_LIMIT_REACHED`. Losing the chat because another service is down would be worse than trusting the caller for one shift.
+- The service listens on two ports: `WS_PORT` (`3008`) serves `/ws/...` alone and is the only one published, because a client connects to the socket directly after negotiating with the Gateway; `HTTP_PORT` (`3009`) serves every REST endpoint and `/status` and stays inside the network, so REST can only arrive through the Gateway. Anything that is not the socket on the WebSocket port answers `404` in the shared error envelope.
 - Errors come back as `{error: {code: string, message: string}}`.
 
 ### Shared Enumerations and Field Formats
@@ -454,9 +622,10 @@ main (protected — reflects last completed lab)
  
 Lab-based versioning: `v{lab}.{iteration}.{patch}`
  
-- Lab completion: `v0.0.0` (this lab), `v1.0.0`, `v2.0.0`, etc.
+- Lab completion: `v0.0.0` (Lab 0), `v1.0.0`, `v2.0.0`, etc.
 - Feature iterations: `v1.1.0`, `v1.2.0`
 - Bug fixes: `v1.0.1`, `v1.0.2`
+- Docker images: tagged with the lab they belong to. During a lab, images pushed by hand use a pre-release tag only (`2.0.0-rc.1`, `2.0.0-rc.2`, …), never `latest`. The final `2.0.0` and `latest` are published only by CI, once, when `dev` is merged into `main` at lab completion — so a version tag always points to exactly one build and is never overwritten. If `dev` is promoted to `main` again (e.g. after evaluation fixes), the repo's version is bumped first (`2.0.1`, `2.0.2`, …), and the CI workflow fails instead of publishing a tag that already exists on Docker Hub.
 ### Lab Completion Process
  
 - All feature branches for a lab merge into `dev` first
@@ -517,6 +686,7 @@ We use the [Conventional Commits](https://www.conventionalcommits.org/) specific
 | University Record Service | https://github.com/ion190/university-record-service | `services/university-record-service` |
 | Moderation Service | https://github.com/D3adeYe69/Moderation-Service | `services/moderation-service` |
 | Discord DMs Service | https://github.com/D3adeYe69/Discord-DMs-Service | `services/discord-dms-service` |
+| Gateway | https://github.com/mihaelaaa-23/gateway | `services/gateway` |
 
 ## Docker Images
 
@@ -524,18 +694,19 @@ Each service is pushed to Docker Hub as a versioned, public image — no Dockerf
 
 | Service | Docker Hub Image | Port | Run Requirements |
 |---|---|---|---|
-| Player Service | [`mihaela5/player-service:0.5.0`](https://hub.docker.com/r/mihaela5/player-service) | 3001 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` |
-| Server Moderation Session Service | [`mihaela5/session-service:0.6.0`](https://hub.docker.com/r/mihaela5/session-service) | 3002 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `PLAYER_SERVICE_URL` (shift XP is sent there on `end`), `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` — if unset, falls back to mocked responses for those dependencies |
-| Applicant Service | [`ciprik13/applicant-service:0.4.0`](https://hub.docker.com/r/ciprik13/applicant-service) | 3003 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `STORE_DRIVER` (`mongo` by default, `memory` runs without a database), `DECEPTIVE_RATE` (share of deceptive applicants, `0.35` by default), `UNIVERSITY_RECORD_SERVICE_URL` (if unset, University Record is mocked) and `HTTP_TIMEOUT_MS` (`2000` by default) |
-| Credential Service | [`ciprik13/credential-service:0.4.0`](https://hub.docker.com/r/ciprik13/credential-service) | 3004 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `CREDENTIAL_SIGNING_SECRET` (HMAC secret for credential authenticity — without it the service falls back to a development secret and credentials issued elsewhere are reported as `FORGED_SIGNATURE`); optionally `STORE_DRIVER` (`mongo` by default, `memory` runs without a database), `APPLICANT_SERVICE_URL` (if unset, Applicant Service is mocked) and `HTTP_TIMEOUT_MS` (`2000` by default) |
-| Server Rules Service | [`ion190/server-rules-service:0.4.1`](https://hub.docker.com/r/ion190/server-rules-service) | 3005 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `UNIVERSITY_RECORD_SERVICE_URL` — if unset or if University Record Service is unreachable, Server Rules Service falls back to its built-in mock university records; if a university record is unavailable, rules requiring that data are reported as unevaluable |
-| University Record Service | [`ion190/university-record-service:0.1.0`](https://hub.docker.com/r/ion190/university-record-service) | 3006 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` |
-| Moderation Service | [`d3adeye/moderation-service:0.3.0`](https://hub.docker.com/r/d3adeye/moderation-service) | 3007 | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` — if unset, falls back to mocked responses for those dependencies — and `DISCORD_DMS_SERVICE_URL` (verdicts are not posted to chat when unset) |
-| Discord DMs Service | [`d3adeye/discord-dms-service:0.3.0`](https://hub.docker.com/r/d3adeye/discord-dms-service) | 3008 | `PORT`, `MONGODB_URI`, `MONGODB_DATABASE`; optionally `SESSION_SERVICE_URL` — when set, a session is checked against Server Moderation Session Service before its channels or roster are created; when unset, the roster is managed through this service's own `/sessions/{id}/members` endpoints |
+| Gateway | [`mihaela5/gateway:2.0.0`](https://hub.docker.com/r/mihaela5/gateway) | 3000 | none required; optionally `PORT` (`3000` by default), `PLAYER_SERVICE_URL`, `SESSION_SERVICE_URL`, `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL`, `MODERATION_SERVICE_URL`, `DISCORD_DMS_SERVICE_URL` (each defaults to its docker-compose address), `UPSTREAM_TIMEOUT_MS` (`10000` by default), `MAX_CONCURRENT_TASKS` (`500` by default; Lab 2, grade 8: beyond it `503 CONCURRENCY_LIMIT_REACHED` with `Retry-After: 1`), `JWT_SECRET` and `SERVICE_TOKEN` (Lab 2, grade 10: both required in compose, so authorization is on; with neither set the image runs with it off), `WS_TICKET_SECRET` and `DISCORD_DMS_WS_PUBLIC_URL` (WebSocket negotiation; without the secret `POST /ws/negotiate` answers `503 WS_NEGOTIATION_DISABLED`). No database |
+| Player Service | [`mihaela5/player-service:2.0.0`](https://hub.docker.com/r/mihaela5/player-service) | 3001, not published — reached through the Gateway at `/player` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `JWT_SECRET` (signs the login token, at least 32 characters; the service does not start without it); optionally `JWT_TTL_SECONDS` (`86400`), `TASK_TIMEOUT_MS` (`2000`) and `MAX_CONCURRENT_TASKS` (`50`) (Lab 2, grade 8), and `REQUIRE_CALLER_HEADERS` (`false` by default, `true` in compose; Lab 2, grade 10: `true` answers `401 UNAUTHORIZED` on a protected route called without the Gateway's caller headers; set only together with the Gateway's authorization) |
+| Server Moderation Session Service | [`mihaela5/session-service:2.0.0`](https://hub.docker.com/r/mihaela5/session-service) | 3002, not published — reached through the Gateway at `/session` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `PLAYER_SERVICE_URL` (shift XP is sent there on `end`), `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` (in compose, each points at the Gateway, e.g. `http://gateway:3000/applicant`) — if unset, falls back to mocked responses for those dependencies; `HTTP_TIMEOUT_MS` (`4500`), `TASK_TIMEOUT_MS` (`8000`) and `MAX_CONCURRENT_TASKS` (`50`) (Lab 2, grade 8, from the timeout budget); `SERVICE_TOKEN` (Lab 2, grade 10: sent as `Authorization: Bearer <token>` on every outgoing call when set, never logged; empty by default) |
+| Applicant Service | [`ciprik13/applicant-service:2.0.0`](https://hub.docker.com/r/ciprik13/applicant-service) | 3003, not published — reached through the Gateway at `/applicant` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `STORE_DRIVER` (`mongo` by default, `memory` runs without a database), `DECEPTIVE_RATE` (share of deceptive applicants, `0.35` by default), `UNIVERSITY_RECORD_SERVICE_URL` (in compose, the Gateway prefix `http://gateway:3000/university-record`; if unset, University Record is mocked), `HTTP_TIMEOUT_MS` (`2000` by default), `TASK_TIMEOUT_MS` (`3000` by default; a request still running after it gets `504 TASK_TIMEOUT`), `MAX_CONCURRENT_TASKS` (`50` by default; beyond it `503 CONCURRENCY_LIMIT_REACHED` with `Retry-After: 1`), `SERVICE_TOKEN` (Lab 2, grade 10: sent as `Authorization: Bearer <token>` on every outgoing call when set, never logged; empty by default) and `ENABLE_TEST_HOOKS` (`false`; demo only, enables `?simulateDelayMs=`) |
+| Credential Service | [`ciprik13/credential-service:2.0.0`](https://hub.docker.com/r/ciprik13/credential-service) | 3004, not published — reached through the Gateway at `/credential` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `CREDENTIAL_SIGNING_SECRET` (HMAC secret for credential authenticity — without it the service falls back to a development secret and credentials issued elsewhere are reported as `FORGED_SIGNATURE`; at start-up it logs a warning when the secret is missing, a value published in the repositories, or shorter than 32 characters); optionally `STORE_DRIVER` (`mongo` by default, `memory` runs without a database), `APPLICANT_SERVICE_URL` (in compose, the Gateway prefix `http://gateway:3000/applicant`; if unset, Applicant Service is mocked), `HTTP_TIMEOUT_MS` (`2000` by default), `TASK_TIMEOUT_MS` (`3000` by default; a request still running after it gets `504 TASK_TIMEOUT`), `MAX_CONCURRENT_TASKS` (`50` by default; beyond it `503 CONCURRENCY_LIMIT_REACHED` with `Retry-After: 1`), `SERVICE_TOKEN` (Lab 2, grade 10: sent as `Authorization: Bearer <token>` on every outgoing call when set, never logged; empty by default) and `ENABLE_TEST_HOOKS` (`false`; demo only, enables `?simulateDelayMs=`) |
+| Server Rules Service | [`ion190/server-rules-service:2.0.0`](https://hub.docker.com/r/ion190/server-rules-service) | 3005, not published — reached through the Gateway at `/server-rules` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `SERVICE_TOKEN` (empty by default; sent as `Authorization: Bearer <SERVICE_TOKEN>` when set), `TASK_TIMEOUT_MS` (`3000`), `MAX_CONCURRENT_TASKS` (`50`), and `UNIVERSITY_RECORD_SERVICE_URL` (in compose, the Gateway prefix `http://gateway:3000/university-record`; if unset, University Record is mocked); if the University Record dependency is unreachable or returns a gateway/server error, the built-in mock university record is used; a real `NOT_FOUND` result is treated as no university record, and rules requiring that data are reported as unevaluable; dependency refusals are propagated as errors |
+| University Record Service | [`ion190/university-record-service:2.0.0`](https://hub.docker.com/r/ion190/university-record-service) | 3006, not published — reached through the Gateway at `/university-record` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` |
+| Moderation Service | [`d3adeye/moderation-service:2.0.0`](https://hub.docker.com/r/d3adeye/moderation-service) | 3007, not published — reached through the Gateway at `/moderation` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` (in compose the Gateway prefixes; if unset, those dependencies are simulated) and `DISCORD_DMS_SERVICE_URL` (verdicts are not posted to chat when unset), `SERVICE_TOKEN` (sent as `Authorization: Bearer` on every outgoing call; empty means the header is not sent), plus `HTTP_TIMEOUT_MS` (`4500` by default), `TASK_TIMEOUT_MS` (`8000`; a request still running after it gets `504 TASK_TIMEOUT`) and `MAX_CONCURRENT_TASKS` (`50`; beyond it `503 CONCURRENCY_LIMIT_REACHED` with `Retry-After: 1`) |
+| Discord DMs Service | [`d3adeye/discord-dms-service:2.0.0`](https://hub.docker.com/r/d3adeye/discord-dms-service) | 3008 WebSocket (published), 3009 REST (not published — reached through the Gateway at `/discord-dms`) | `WS_PORT` (`3008`, serves `/ws/...` only), `HTTP_PORT` (`3009`, serves every REST endpoint and `/status`), `MONGODB_URI`, `MONGODB_DATABASE`; optionally `WS_TICKET_SECRET` (shared with the Gateway, which signs the tickets that authorise a WebSocket connection; at least 32 characters and not the same value as `JWT_SECRET` or `SERVICE_TOKEN`, or it is ignored and the socket keeps taking a plain `?playerId=`) and `SESSION_SERVICE_URL` — when set, a session is checked against Server Moderation Session Service before its channels or roster are created; when unset, the roster is managed through this service's own `/sessions/{id}/members` endpoints, `SERVICE_TOKEN` (sent as `Authorization: Bearer` on the session check; empty means the header is not sent), plus `HTTP_TIMEOUT_MS` (`8500` by default), `TASK_TIMEOUT_MS` (`9000`; a REST request still running after it gets `504 TASK_TIMEOUT`) and `MAX_CONCURRENT_TASKS` (`50`; beyond it `503 CONCURRENCY_LIMIT_REACHED` with `Retry-After: 1`) — none of which apply to the WebSocket, which is open for a whole shift |
 
 Pull an image directly, e.g.:
 ```bash
-docker pull mihaela5/player-service:0.5.0
+docker pull mihaela5/player-service:2.0.0
 ```
 
 **Note:** these are the variables the container itself reads. If you're running the full system via the shared `docker-compose.yml` at the repo root, its `.env` file uses service-prefixed names instead (e.g. `PLAYER_DB_USER`) to avoid collisions across all 8 services sharing one file — see that file for the exact mapping.
@@ -546,10 +717,10 @@ See `docker-compose.yml` at the repo root for the full setup, including each ser
 
 **Requirements:** Docker 24+ with Docker Compose v2. No local Node.js or Go is needed to run the services. Node.js 18+ is only needed for running the Postman collections with newman (or import them into the Postman app instead).
 
-1. Create your environment file with `cp .env.example .env`, then replace every `replace-with-…` placeholder with a real value. `.env.example` shows how to generate strong values, and `.env` is gitignored and must never be committed.
+1. Create your environment file with `cp .env.example .env`, then replace every `replace-with-…` placeholder with a real value and generate your own `JWT_SECRET` and `SERVICE_TOKEN`, two different values (both empty in `.env.example` on purpose: `docker compose` refuses to start without them, so no machine runs with a published secret). Also replace the `change-me` of `WS_TICKET_SECRET` with a third value of at least 32 characters; while it is `change-me` the stack starts, but WebSocket negotiation stays off. `.env.example` shows how to generate strong values, and `.env` is gitignored and must never be committed.
 2. Start everything with `docker compose up -d`.
-3. Check that each service is healthy with `curl http://localhost:<port>/status`.
-4. Test a service with its Postman collection from `postman/`, e.g. `npx newman run postman/session-service.postman_collection.json`.
+3. Check that each service is healthy through the Gateway with `curl http://localhost:3000/<prefix>/status` (e.g. `/player/status`); `curl http://localhost:3000/status` is the Gateway's own. The status routes need no token.
+4. Test a service with its Postman collection from `postman/`, e.g. `npx newman run postman/session-service.postman_collection.json`. Each collection registers and logs in a player first, because every other route needs `Authorization: Bearer <token>`.
 
 Each database runs `db/<service>/init.*` on first startup and persists its data in a named Docker volume, so data survives `docker compose down`. Use `docker compose down -v` to wipe it.
 

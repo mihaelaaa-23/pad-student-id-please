@@ -5,14 +5,89 @@
     "description": "Every HTTP endpoint of the Discord DMs Service (Team 18, PAD project \"Student ID, Please\"), ordered as a walkthrough of one moderation shift: create the channels, put the team on them, talk, then clean up.\n\nRun it top to bottom with the Collection Runner against a running stack (`./scripts/run.sh`, or `docker compose up -d`). Each request asserts its own status code, and the message id is passed between requests through a collection variable.\n\nThe real-time endpoint is not part of this collection, because a WebSocket cannot be replayed by the Collection Runner. Open it separately, in Postman's WebSocket request type or with `websocat`:\n\n    ws://localhost:3008/ws/sessions/{{sessionId}}/channels/general-mod-chat?playerId={{juniorId}}\n\nSend `{\"senderId\": \"{{juniorId}}\", \"content\": \"Hello\"}` and every other client on that channel receives `{\"senderId\", \"content\", \"timestamp\"}`.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
+  "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{token}}", "type": "string"}]},
   "variable": [
-    { "key": "baseUrl", "value": "http://localhost:3008" },
+    { "key": "baseUrl", "value": "http://localhost:3000/discord-dms" },
     { "key": "sessionId", "value": "shift-001" },
     { "key": "moderatorId", "value": "player-moderator-1" },
     { "key": "juniorId", "value": "player-junior-1" },
-    { "key": "messageId", "value": "" }
+    { "key": "messageId", "value": "" },
+    { "key": "sessionServiceUrl", "value": "http://localhost:3000/session" },
+    { "key": "playerUrl", "value": "http://localhost:3000/player" },
+    { "key": "username", "value": "" },
+    { "key": "playerId", "value": "" },
+    { "key": "token", "value": "" }
   ],
   "item": [
+    {
+      "name": "Register Test Player",
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n    \"username\": \"{{username}}\",\n    \"email\": \"{{username}}@test.com\",\n    \"password\": \"pw123\"\n}" },
+        "url": {
+          "raw": "{{playerUrl}}/players/register",
+          "host": ["{{playerUrl}}"],
+          "path": ["players", "register"]
+        },
+        "description": "Registers a throwaway player. Register and login are public, so this works whether or not the Gateway is enforcing authorization yet."
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Lab 2, grade 10: every route behind the Gateway needs a player token once its",
+              "// authorization is on, so the collection registers and logs in a fresh player first.",
+              "// It also works while authorization is off: register and login are always public.",
+              "pm.collectionVariables.set('username', 'discord_dms_pm_' + Date.now());"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('test player was registered', function () { pm.response.to.have.status(201); });",
+              "pm.collectionVariables.set('playerId', pm.response.json().playerId);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Login Test Player",
+      "request": {
+        "auth": { "type": "noauth" },
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": { "mode": "raw", "raw": "{\n    \"username\": \"{{username}}\",\n    \"password\": \"pw123\"\n}" },
+        "url": {
+          "raw": "{{playerUrl}}/players/login",
+          "host": ["{{playerUrl}}"],
+          "path": ["players", "login"]
+        },
+        "description": "Saves the token every request below sends as Authorization: Bearer, through the collection-level auth."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('test player logged in', function () { pm.response.to.have.status(200); });",
+              "pm.test('the token is a signed JWT', function () { pm.expect(json.token.split('.')).to.have.lengthOf(3); });",
+              "// Every request below sends it as Authorization: Bearer (collection-level auth).",
+              "pm.collectionVariables.set('token', json.token);"
+            ]
+          }
+        }
+      ]
+    },
     {
       "name": "Health",
       "item": [
@@ -47,6 +122,40 @@
       "name": "Channels",
       "item": [
         {
+          "name": "Create the shift in Server Moderation Session Service",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n    \"moderatorId\": \"{{moderatorId}}\",\n    \"juniorIds\": [\"{{juniorId}}\"]\n}" },
+            "url": {
+              "raw": "{{sessionServiceUrl}}/sessions",
+              "host": ["{{sessionServiceUrl}}"],
+              "path": ["sessions"]
+            },
+            "description": "Creates the shift every request below belongs to. With SESSION_SERVICE_URL set, this service answers 404 for a session Server Moderation Session Service does not know, so the shift has to be a real one. It also gives every run its own session id, so a second run never meets the channels, members and messages the first one left behind."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the shift was created', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "if (pm.response.code === 201) {",
+                  "    pm.collectionVariables.set('sessionId', pm.response.json().sessionId);",
+                  "} else {",
+                  "    // Without a shift every request below would send 'undefined' in its",
+                  "    // path and fail for the wrong reason, hiding what actually went wrong.",
+                  "    pm.execution.setNextRequest(null);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "Create the default channels of a shift",
           "request": {
             "method": "POST",
@@ -59,17 +168,6 @@
             "description": "Creates #enrollment-check, #faculty-check, #course-registration and #general-mod-chat. Safe to run twice: channels that already exist are reported as existing."
           },
           "event": [
-            {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "// Give every run its own shift, so a second run never meets the",
-                  "// channels, members and messages the first one left behind.",
-                  "pm.collectionVariables.set('sessionId', 'shift-' + Date.now());"
-                ]
-              }
-            },
             {
               "listen": "test",
               "script": {
@@ -689,6 +787,62 @@
               }
             }
           ]
+        },
+        {
+          "name": "Delete the shift",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{sessionServiceUrl}}/sessions/{{sessionId}}",
+              "host": ["{{sessionServiceUrl}}"],
+              "path": ["sessions", "{{sessionId}}"]
+            },
+            "description": "Removes the shift this run created, so re-running the collection does not pile up sessions in Server Moderation Session Service."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the shift was deleted', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().deleted).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Delete Test Player",
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "url": {
+          "raw": "{{playerUrl}}/players/{{playerId}}",
+          "host": ["{{playerUrl}}"],
+          "path": ["players", "{{playerId}}"]
+        },
+        "description": "Removes the throwaway player, so re-running does not pile them up."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Clean-up with the player's own token: Player Service lets a player delete only",
+              "// their own account.",
+              "pm.test('test player was removed', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(pm.response.json().deleted).to.be.true;",
+              "});"
+            ]
+          }
         }
       ]
     }

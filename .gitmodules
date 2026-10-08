@@ -31,3 +31,7 @@
 	url = https://github.com/ion190/university-record-service.git
 	branch = dev
 
+[submodule "services/gateway"]
+	path = services/gateway
+	url = https://github.com/mihaelaaa-23/gateway.git
+	branch = dev

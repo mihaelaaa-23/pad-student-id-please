@@ -4,10 +4,20 @@
     "name": "Server Moderation Session Service",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
   "variable": [
     {
       "key": "baseUrl",
-      "value": "http://localhost:3002"
+      "value": "http://localhost:3000/session"
     },
     {
       "key": "sessionId",
@@ -15,6 +25,22 @@
     },
     {
       "key": "currentApplicantId",
+      "value": ""
+    },
+    {
+      "key": "playerUrl",
+      "value": "http://localhost:3000/player"
+    },
+    {
+      "key": "username",
+      "value": ""
+    },
+    {
+      "key": "moderatorId",
+      "value": ""
+    },
+    {
+      "key": "token",
       "value": ""
     }
   ],
@@ -46,6 +72,109 @@
           ],
           "path": [
             "status"
+          ]
+        },
+        "auth": {
+          "type": "noauth"
+        }
+      }
+    },
+    {
+      "name": "Register Moderator",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// A real player moderates the shift, so the XP awarded on \"end\" can be checked.",
+              "pm.collectionVariables.set('username', 'moderator_' + Date.now());"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('moderator was registered', function () {",
+              "    pm.response.to.have.status(201);",
+              "});",
+              "pm.collectionVariables.set('moderatorId', json.playerId);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "auth": {
+          "type": "noauth"
+        },
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"username\": \"{{username}}\",\n  \"email\": \"moderator@test.com\",\n  \"password\": \"pw123\"\n}"
+        },
+        "url": {
+          "raw": "{{playerUrl}}/players/register",
+          "host": [
+            "{{playerUrl}}"
+          ],
+          "path": [
+            "players",
+            "register"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Login Moderator",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('moderator logged in', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(json.token.split('.')).to.have.lengthOf(3);",
+              "});",
+              "// Every request below sends it as Authorization: Bearer (collection-level auth).",
+              "pm.collectionVariables.set('token', json.token);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "auth": {
+          "type": "noauth"
+        },
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"pw123\"\n}"
+        },
+        "url": {
+          "raw": "{{playerUrl}}/players/login",
+          "host": [
+            "{{playerUrl}}"
+          ],
+          "path": [
+            "players",
+            "login"
           ]
         }
       }
@@ -79,7 +208,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"moderatorId\": \"p_mod1\",\n  \"juniorIds\": [\"p_jr1\", \"p_jr2\"]\n}"
+          "raw": "{\n  \"moderatorId\": \"{{moderatorId}}\",\n  \"juniorIds\": [\"p_jr1\", \"p_jr2\"]\n}"
         },
         "url": {
           "raw": "{{baseUrl}}/sessions",
@@ -298,6 +427,39 @@
       }
     },
     {
+      "name": "Moderator Received Shift XP",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "// Session awards XP through the Gateway when the shift ends: 10 per processed applicant.",
+              "pm.test('the moderator got the XP of the shift', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(json.xp).to.eql(10);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{playerUrl}}/players/{{moderatorId}}",
+          "host": [
+            "{{playerUrl}}"
+          ],
+          "path": [
+            "players",
+            "{{moderatorId}}"
+          ]
+        }
+      }
+    },
+    {
       "name": "End Session Again",
       "event": [
         {
@@ -448,6 +610,37 @@
           "path": [
             "sessions",
             "does-not-exist"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Delete Moderator",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('the test player was removed', function () {",
+              "    pm.response.to.have.status(200);",
+              "    pm.expect(pm.response.json().deleted).to.be.true;",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "url": {
+          "raw": "{{playerUrl}}/players/{{moderatorId}}",
+          "host": [
+            "{{playerUrl}}"
+          ],
+          "path": [
+            "players",
+            "{{moderatorId}}"
           ]
         }
       }

@@ -9,10 +9,16 @@ CREATE TABLE IF NOT EXISTS university_records (
     study_year INTEGER,
     role VARCHAR(50) NOT NULL,
     enrollment_status VARCHAR(50) NOT NULL DEFAULT 'active',
+    previously_banned BOOLEAN NOT NULL DEFAULT FALSE,
+    is_enrolled BOOLEAN NOT NULL DEFAULT FALSE,
     average_grade NUMERIC(5,2),
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE university_records
+    ADD COLUMN IF NOT EXISTS previously_banned BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS is_enrolled BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE INDEX IF NOT EXISTS idx_university_records_applicant_id
     ON university_records(applicant_id);
@@ -27,6 +33,8 @@ INSERT INTO university_records (
     study_year,
     role,
     enrollment_status,
+    previously_banned,
+    is_enrolled,
     average_grade
 )
 VALUES
@@ -40,6 +48,8 @@ VALUES
     4,
     'student_faf',
     'active',
+    FALSE,
+    TRUE,
     9.25
 ),
 (
@@ -52,6 +62,8 @@ VALUES
     3,
     'student_other',
     'active',
+    FALSE,
+    TRUE,
     8.70
 )
 ON CONFLICT (applicant_id) DO NOTHING;
