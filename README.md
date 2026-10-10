@@ -271,6 +271,47 @@ Notes for callers:
 
   **While `WS_TICKET_SECRET` is unset**, Discord DMs keeps accepting `?playerId=` as before and the Gateway answers `503 WS_NEGOTIATION_DISABLED`. That is the state before this is rolled out, so the two services can ship their halves independently. Because that fallback is silent from the outside, Discord DMs logs a warning at startup when the secret is missing, and the shared `docker-compose.yml` sets it on both services from `.env` — a forgotten secret should be visible, not merely permissive.
 
+#### Service Discovery
+
+The registry of running service instances (Lab 3). Every instance registers itself on startup, sends heartbeats while it runs and deregisters on shutdown; Service Discovery also polls each instance's `/status` on an interval. The Gateway reads the list of healthy instances from it to choose where to forward a request, so instances can be added and removed without changing any configuration.
+
+Service Discovery is internal infrastructure: it listens on `3010` inside the compose network (`http://service-discovery:3010`, `SERVICE_DISCOVERY_URL`), is not published to the host and is **not reached through the Gateway**. That is the one exception to "all REST traffic goes through the Gateway", and it is forced: the Gateway needs Service Discovery to find any service, so registration cannot depend on the Gateway being up. It runs as a single instance and has no database.
+
+| Method | Path | Request | Response |
+|---|---|---|---|
+| POST | /services/register | `{serviceName: string, instanceId: string, url: string, statusPath?: string}` | `201` new, `200` already registered + `{serviceName: string, instanceId: string, url: string, state: string, registeredAt: string}` |
+| PUT | /services/{serviceName}/instances/{instanceId}/heartbeat | — | `200` + `{serviceName: string, instanceId: string, state: string, lastSeen: string}`; `404 NOT_FOUND` if the instance is not registered |
+| DELETE | /services/{serviceName}/instances/{instanceId} | — | `204`; `404 NOT_FOUND` if the instance is not registered |
+| POST | /services/{serviceName}/instances/{instanceId}/report | `{reporter: string, reason: string}` | `202` + `{serviceName: string, instanceId: string, state: string}`; `404 NOT_FOUND` if the instance is not registered |
+| GET | /services/{serviceName}/instances | `?includeUnhealthy=boolean` (default `false`) | `{serviceName: string, instances: [instance]}` |
+| GET | /services | — | `{services: {<serviceName>: [instance]}}` — every instance in every state |
+| GET | /health | — | `{status: "ok"}` |
+| GET | /status | — | `{service: "service-discovery", status: string, time: string, instances: int}` |
+
+`instance` is `{serviceName: string, instanceId: string, url: string, state: string, load: object|null, lastSeen: string|null, registeredAt: string}`.
+
+Notes for callers:
+
+- **Fields.** `serviceName` is the compose service name (`applicant-service`, `gateway`, …), the same value services write as `service` in their logs. `instanceId` identifies one running instance and is the same value the instance writes as `instanceId` in its logs. `url` is the base address the Gateway uses to reach that instance from inside the compose network, e.g. `http://172.18.0.12:3003`; with replicas the compose service name resolves to any of them, so each instance advertises its own container address (or `ADVERTISE_URL` when set). `statusPath` defaults to `/status`. Timestamps are ISO 8601 UTC with milliseconds.
+- **Authorization.** Every write (`register`, `heartbeat`, `DELETE`, `report`) needs `Authorization: Bearer <SERVICE_TOKEN>`, the same shared service token as in Lab 2; anything else is `401 UNAUTHORIZED` with `WWW-Authenticate: Bearer`. Reads are open inside the compose network. A registry anyone could write to would let any container redirect traffic to itself.
+- **Registering.** An instance registers once its HTTP server is listening. If Service Discovery is not reachable yet, it retries with exponential backoff (1 s, 2 s, 4 s, … capped at 30 s) and keeps serving meanwhile. Registering is idempotent: registering the same `serviceName` + `instanceId` again answers `200`, updates `url` and `statusPath`, and does not change the instance's state.
+- **Heartbeats.** Each instance sends a heartbeat every `SD_HEARTBEAT_MS` (default `10000`). A `404` means Service Discovery does not know the instance (it restarted and lost its in-memory registry), so the instance registers again. The registry is soft state: after a restart of Service Discovery it fills up again within one heartbeat interval.
+- **Deregistering.** On `SIGTERM` or `SIGINT` an instance sends `DELETE` with a short timeout, best effort, then stops. `docker compose stop` and scaling down therefore remove instances immediately.
+- **Health polling.** Every `HEALTH_INTERVAL_MS` (default `5000`) Service Discovery calls each registered instance's `statusPath` directly, with a timeout of `HEALTH_TIMEOUT_MS` (default `1000`). A poll succeeds when the instance answers `200`; the `load` object from that response is stored as the instance's `load` (its shape is defined by the `/status` load field). `lastSeen` is the time of the last successful poll or heartbeat.
+- **States.**
+
+  | State | Meaning | Returned by `GET /services/{name}/instances` |
+  |---|---|---|
+  | `healthy` | registered and answering | yes |
+  | `unhealthy` | `HEALTH_FAILURES_TO_UNHEALTHY` (default `3`) polls in a row failed | only with `includeUnhealthy=true` |
+  | `removed` | a caller's circuit breaker reported it (`report`) | only with `includeUnhealthy=true` |
+
+  A new instance starts `healthy`. An `unhealthy` or `removed` instance is still polled, and after `HEALTH_SUCCESSES_TO_READMIT` (default `3`) successful polls in a row it is `healthy` again, so a false alarm or a restarted container rejoins without any manual step. An instance with no successful poll and no heartbeat for `EVICT_AFTER_MS` (default `60000`) is deleted from the registry, which cleans up containers that were killed without deregistering.
+- **Critical load.** An instance whose `load` is critical (as defined by the `/status` load field) stays `healthy` and keeps receiving traffic; Service Discovery logs an alert and notifies the developers. Alerts are sent on state changes only (normal → critical, critical → normal, `healthy` → `unhealthy` / `removed` and back), not on every poll.
+- **Reporting (Lab 3, grade 10).** A caller whose circuit breaker trips for an instance sends `report` with its own `serviceName` as `reporter` and a short `reason` (e.g. `"3 failures in 8750 ms"`). The instance becomes `removed` at once and stops being returned to the Gateway; health polling decides when it comes back.
+- **Choosing an instance** is the Gateway's job (round-robin over the healthy list). Services keep calling each other through the Gateway exactly as in Lab 2; they use Service Discovery only to register, heartbeat, deregister and report.
+- **Errors** use the shared envelope `{error: {code: string, message: string}}`: `401 UNAUTHORIZED`, `404 NOT_FOUND` (unknown instance on a write), `422 VALIDATION_FAILED` (missing or empty field, `url` not `http://` or `https://`, `statusPath` not starting with `/`), `500 INTERNAL_ERROR`. An unknown `serviceName` on `GET /services/{name}/instances` is not an error: it answers `200` with an empty `instances` list, since a service with no running instances is a normal state.
+
 #### Player Service
 | Method | Path | Request | Response |
 |---|---|---|---|
