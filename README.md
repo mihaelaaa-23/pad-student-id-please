@@ -10,6 +10,7 @@ Team 18
 - [Architecture Diagram](#architecture-diagram)
 - [Tech Stack & Communication Patterns](#tech-stack--communication-patterns)
 - [Communication Contract](#communication-contract)
+- [Logging Convention](#logging-convention)
 - [Development Guidelines](#development-guidelines)
 - [Microservice Repositories](#microservice-repositories)
 - [Docker Images](#docker-images)
@@ -596,6 +597,74 @@ Which documents a role is expected to hold:
 | `outsider` | none |
 
 An outsider holding no university documents is therefore reported as `valid: true` with no issues. Credential Service validates documents, not admission: rejecting an outsider is Moderation Service's decision, based on the current server rules.
+
+## Logging Convention
+
+This is the proposed cross-service logging convention for Lab 3. All service owners should review it through this CPR pull request before it becomes the agreed team standard.
+
+### Output format and required fields
+
+Every log event is one JSON object on one line (JSON Lines). Logs are written to standard output (`stdout`) so Docker Compose collects output from all instances in one place. Do not construct unstructured log lines manually.
+
+Every event must contain these fields:
+
+| Field | Requirement |
+|---|---|
+| `timestamp` | ISO 8601 UTC timestamp with exactly millisecond precision, for example `2026-10-10T08:01:02.345Z` |
+| `level` | Uppercase `DEBUG`, `INFO`, `WARN`, or `ERROR` |
+| `service` | Exact Compose/registry service name, such as `server-rules-service` |
+| `instanceId` | Instance identifier in the form `<serviceName>-<hostname>` |
+| `message` | Short, human-readable description of the event |
+
+Additional context must be included as structured JSON fields, not concatenated into the message. Use consistent names across services wherever the same information is logged. Relevant fields include `method`, `path`, `requester`, `status`, `duration_ms`, `target_service`, `target_instance_id`, `error`, `fallback`, `retry_attempt`, `state`, and `reason`. Include applicable fields for each event type.
+
+### Logger libraries and configuration
+
+| Language | Required logging library/configuration |
+|---|---|
+| Node.js | Pino, configured to emit the required JSON format |
+| Go | Standard library `log/slog` with a JSON handler |
+| Python | Standard library `logging` with a JSON formatter |
+
+Each service must configure its logger once in a dedicated logging module and import that logger wherever needed. The `LOG_LEVEL` environment variable controls the minimum emitted level; the default is `INFO`. All implementations must use the same four level names and the required timestamp format, even where the underlying library defaults differ.
+
+The logger must be initialized early enough to record startup failures. Logging must not depend on a database, Service Discovery, or another remote service being available.
+
+### Required logging coverage
+
+Every code path added or modified for Lab 3 must use the configured logger. At minimum, log:
+
+- Every incoming HTTP request, including its method, path and requester when known, and every completed request with its HTTP status and duration.
+- Every outgoing call when it starts and finishes, including the target service, target instance when selected or known, path, outcome, and duration. The Gateway must log the actual upstream instance it selects.
+- Decisions that affect an outcome, including validation failures, not-found and conflict responses, mock-data fallbacks, retries, and refused dependency calls.
+- Every error with safe diagnostic context and its cause.
+- Startup and shutdown, database connection and disconnection, and Service Discovery registration, retry and deregistration.
+- Circuit-breaker state changes, trips and instance removals.
+- In Service Discovery, every unhealthy or critical health-poll result and every health alert sent.
+
+Use the appropriate level: `DEBUG` for detailed diagnostics, `INFO` for normal lifecycle and request events, `WARN` for degraded conditions and recoverable failures, and `ERROR` for errors requiring attention. Do not silently ignore failed operations or decision branches.
+
+### Security requirements
+
+Never log passwords, access tokens, JWTs, signing secrets, webhook URLs, authorization headers or other secrets. Do not log complete request bodies by default. Include only the safe contextual information needed to diagnose an event.
+
+Bare `console.log`, `fmt.Println` and `print` statements are not permitted in service code. All operational messages must go through the configured logger.
+
+### Examples
+
+Request received:
+
+```json
+{"timestamp":"2026-10-10T08:01:02.345Z","level":"INFO","service":"server-rules-service","instanceId":"server-rules-service-ab12cd","message":"request received","method":"POST","path":"/rules/evaluate"}
+```
+
+Dependency failure and mock fallback:
+
+```json
+{"timestamp":"2026-10-10T08:01:04.345Z","level":"WARN","service":"server-rules-service","instanceId":"server-rules-service-ab12cd","message":"outgoing call failed; using mock data","target_service":"university-record-service","path":"/university-record/records","error":"timeout","duration_ms":2000,"fallback":"mock"}
+```
+
+The field names and timestamp representation are part of the proposed shared format. Language-specific logger defaults must be configured to match them. Implementation details that depend on the final Service Discovery and routing decisions must follow the contract approved by the team.
 
 ## Development Guidelines
  
