@@ -728,6 +728,7 @@ We use the [Conventional Commits](https://www.conventionalcommits.org/) specific
 | Moderation Service | https://github.com/D3adeYe69/Moderation-Service | `services/moderation-service` |
 | Discord DMs Service | https://github.com/D3adeYe69/Discord-DMs-Service | `services/discord-dms-service` |
 | Gateway | https://github.com/mihaelaaa-23/gateway | `services/gateway` |
+| Service Discovery | https://github.com/ciprik13/service-discovery | `services/service-discovery` |
 
 ## Docker Images
 
