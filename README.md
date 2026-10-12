@@ -576,7 +576,7 @@ Notes for callers:
 
 ### Circuit Breaker
 
-Every service that calls another service wraps those calls in a circuit breaker (Lab 3, grades 7 and 10). These rules are shared: the Node services copy one reference implementation, Discord DMs and Moderation implement the same behaviour in Go, and the Gateway applies it to its upstreams. No call to Service Discovery is wrapped: not `register`, `heartbeat`, `DELETE` or `report` from the services, and not Service Discovery's own health polls.
+Every service that calls another service wraps those calls in a circuit breaker (Lab 3, grades 7 and 10). These rules are shared: the Node services copy one reference implementation, Discord DMs and Moderation implement the same behaviour in Go, and the Gateway applies it to its upstreams. No call to Service Discovery is wrapped: not `register`, `heartbeat`, `DELETE` or `report` from the services, and not Service Discovery's own health polls. Moderation's verdict announcement to Discord DMs is not wrapped either: it is best-effort (see the timeout budget), so its failures are logged at `WARN` and never counted.
 
 This section replaces the mock fallbacks still described in the service sections and in the Gateway notes above; each owner removes them from their section with the change that removes the mock from their service.
 
@@ -589,13 +589,14 @@ This section replaces the mock fallbacks still described in the service sections
 | Credential → Applicant | `3500` | `12250` |
 | Server Moderation Session → Player, Applicant, Credential, Server Rules, University Record | `4500` | `15750` |
 | Moderation → Applicant, Credential, Server Rules, University Record | `4500` | `15750` |
-| Moderation → Discord DMs (verdict announcement) | `3000` | `10500` |
 | Discord DMs → Server Moderation Session | `8500` | `29750` |
 | Gateway → every service (`UPSTREAM_TIMEOUT_MS`) | `10000` | `35000` |
 
 A service whose timeout changes takes the new window with it; implementations compute the window from the timeout instead of hard-coding the number.
 
-**The caller's timeout goes to the Gateway.** Every outgoing call sends `X-Timeout-Ms: <HTTP_TIMEOUT_MS>`. The Gateway gives up on the instance `200` ms before that (and never later than `UPSTREAM_TIMEOUT_MS`) and answers `504 GATEWAY_TIMEOUT` with that instance's `X-Instance-Id`, so a replica that accepts connections but never answers is counted against itself, not against the whole service. `HTTP_TIMEOUT_MS − 200` stays above the callee's `TASK_TIMEOUT_MS` on every hop of the timeout budget (the documented Moderation → Discord DMs exception aside), so a callee is still never cut off before its own task timeout. A timeout on the caller's side, with no response at all, then means the Gateway itself did not answer.
+**The caller's timeout goes to the Gateway.** Every outgoing call sends `X-Timeout-Ms: <HTTP_TIMEOUT_MS>`. The Gateway gives up on the instance `200` ms before that (and never later than `UPSTREAM_TIMEOUT_MS`) and answers `504 GATEWAY_TIMEOUT` with that instance's `X-Instance-Id`, so a replica that accepts connections but never answers is counted against itself, not against the whole service. `HTTP_TIMEOUT_MS − 200` stays above the callee's `TASK_TIMEOUT_MS` on every wrapped hop of the timeout budget, so a callee is still never cut off before its own task timeout. A timeout on the caller's side, with no response at all, then means the Gateway itself did not answer.
+
+The Gateway honours `X-Timeout-Ms` only on calls made with the service token, and removes a client-sent one like the `X-Caller-*` headers; client requests keep `UPSTREAM_TIMEOUT_MS`. Otherwise a client could send a tiny timeout and make healthy instances look like they time out. The Gateway's own breaker counts a timeout only when its own `UPSTREAM_TIMEOUT_MS` ran out: a `504 GATEWAY_TIMEOUT` it answered because of a caller's `X-Timeout-Ms` is counted by that caller alone, so one slow call is never counted twice.
 
 **What counts as a failure.** Decided by `error.code` when the response carries a code from this table, otherwise by status:
 
