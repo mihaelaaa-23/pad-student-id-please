@@ -111,26 +111,27 @@ It does **not** own any player, session, applicant, credential, rule, record, de
 
 ![Architecture](./docs/architecture.png)
 
-The **API Gateway** (port `3000`, Python, no database) is the single entry point of the system. The Client sends every REST request to the Gateway with an `Authorization: Bearer <token>` header; the Gateway validates it, does not forward it downstream, and routes the request to the service that owns the resource. The services sit inside a single **Service Layer** boundary and are not published to the host — only the Gateway (`:3000`) and Discord DMs' WebSocket listener (`:3008`) are. Each service's database is drawn as a labeled cylinder next to it, color-coded MongoDB (green) vs. PostgreSQL (blue).
+The Client reaches the system only through the **API Gateway** (`:3000`, Python, one instance). It sends every REST request with `Authorization: Bearer <token>`; the Gateway validates the token, does not forward it, takes the healthy instances of the target service from **Service Discovery** and forwards the request to one of them in round-robin order. The black arrows are these forwarded requests, one per service; each service box shows its port, language and route prefix.
 
-Arrows inside the Service Layer are **logical dependencies, not direct connections**: every service-to-service call also goes out through the Gateway. The pink path (① → ②) shows one example — Server Moderation Session Service calls `gateway:3000/applicant/…`, and the Gateway forwards the request to Applicant Service. The only traffic that bypasses the Gateway is the WebSocket (orange, dashed): the Client first asks the Gateway for a WebSocket URL and a short-lived ticket, then connects to Discord DMs directly. Every service, like the Gateway, enforces a task timeout and a concurrent task limit. The legend explains the remaining line styles: orchestration queries (Session/Moderation calling a data service), session checks and verdicts relayed to chat, the Applicant/Credential/University Record mutual-initialization trio (target design), and Server Rules' record check against University Record.
+Services never call each other directly. Every service-to-service call goes back out through the Gateway (orange arrows), which forwards it like any other request; each orange label names the target service and what the call is for. The only traffic that bypasses the Gateway is the Discord DMs WebSocket (blue): the Client first gets a URL and a signed 60-second ticket from `POST /ws/negotiate`, then connects to Discord DMs on `:3008` directly.
+
+Every service except Discord DMs runs as 2–3 replicas (stacked boxes) behind one service name, and all replicas of a service share its private database (green: MongoDB, blue: PostgreSQL), labelled with the database name and what it stores. Discord DMs runs as one instance, because `:3008` is published to the host and a message sent to one replica would not reach sockets connected to another.
+
+**Service Discovery** (`:3010`, Python, one instance, in-memory registry) is the one REST exception to "everything goes through the Gateway", because the Gateway depends on it. Each instance registers on startup, sends a heartbeat every 10 s, deregisters on shutdown and reports an instance whose circuit breaker tripped; Service Discovery calls every instance's `/status` every 5 s (purple, dashed). The Gateway reads the healthy instances from it and reports tripped instances to it (teal). When an instance changes state or its load becomes critical, Service Discovery alerts the developers (red, dashed).
+
+Only the Gateway (`:3000`) and the Discord DMs WebSocket (`:3008`) are published to the host; everything else stays inside the Docker Compose network.
 
 **Service Relationships**
 
-Every relationship below is a REST call sent through the Gateway, which forwards it to the target service; no service calls another one directly.
+Every relationship below is a REST call sent through the Gateway, which forwards it to a healthy instance of the target service.
 
-Server Moderation Session Service acts as the central coordinator during an active shift. It queries Applicant Service for the current applicant, Credential Service to check submitted documents, Server Rules Service to evaluate the applicant against current access rules, and University Record Service to pull any hidden records needed for verification. Once a shift ends, it sends the result to Player Service so XP and levels can be updated.
-This is exposed concretely through `POST /sessions/{id}/process-applicant`, which calls the real services when their URLs are configured (as they all are in the shared `docker-compose.yml`) and falls back to contract-shaped mocks when a service is unset or unreachable. The response's `sources` object says, per dependency, whether the answer was `live` or `mock`.
-
-Moderation Service independently gathers the same four services — Applicant, Credential, Server Rules, and University Record — to determine whether the Moderator's decision (Accept, Reject, Flag, or Ban) was correct under the current rules. It does not talk to Player Service or Session Service; it only consumes applicant-side data to produce a verdict.
-
-Applicant Service, Credential Service, and University Record Service share a mutual initialization pattern: whichever of the three is contacted first for a new applicant creates that applicant's record and propagates the relevant data to the other two. This is why all three are connected to each other rather than routing through a single source of truth. This is the target design; no service propagates records yet (see "Status in Lab 1" under Data Management).
-
-Server Rules Service also calls University Record Service, since rule evaluation can require checking specific university records (e.g. enrollment length, prior ban status) rather than relying only on what the applicant presents.
-
-Discord DMs Service is tied to the active session: it provides the real-time channels (`#enrollment-check`, `#faculty-check`, etc.) that Junior Moderators use to share findings during a shift, and it checks sessions against Server Moderation Session Service. Moderation Service also calls Discord DMs Service, since the Moderator's final decision needs to be relayed back to the team through chat. Players reach these channels over the WebSocket described above, not through the Gateway.
-
-Player Service sits at the edge of this graph — it only receives shift outcomes from Session Service and has no relationship with the applicant-side services (Applicant, Credential, Server Rules, University Record) or with Moderation Service.
+- **Server Moderation Session Service** coordinates a shift. For each applicant it asks Applicant Service to generate the applicant, Credential Service to create or read its credential, Server Rules Service to evaluate the rules and University Record Service for the applicant's records. When the shift ends, it sends the earned XP to Player Service.
+- **Moderation Service** gathers data from Applicant, Credential, Server Rules and University Record to score the Moderator's decision (Accept, Reject, Flag or Ban), and announces the verdict through Discord DMs Service.
+- **Discord DMs Service** checks a session against Server Moderation Session Service before creating its channels and roster.
+- **Applicant Service** reads from University Record Service the record of an applicant it does not hold.
+- **Credential Service** looks up the applicant in Applicant Service.
+- **Server Rules Service** reads from University Record Service the records it needs to evaluate the rules.
+- **Player Service** and **University Record Service** call no other service.
 
 ## Tech Stack & Communication Patterns
 
