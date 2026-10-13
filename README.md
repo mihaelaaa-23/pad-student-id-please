@@ -617,9 +617,9 @@ Every event must contain these fields:
 | `message` | Short, human-readable event description |
 | `requestId` | Required on every request-scoped event; omitted for events that do not belong to a request |
 
-The Gateway establishes `X-Request-Id` for a request. Each service preserves that value, or generates a UUID if a request arrives without one. The same `requestId` must appear in all logs produced while handling that request, including outgoing-call, retry, fallback and error events. Every outgoing HTTP call must propagate the same ID in its `X-Request-Id` header; a downstream service must not create a new ID when one is already present.
+The Gateway establishes `X-Request-Id` for a request. Each service preserves that value, or generates a UUID if a request arrives without one. The same `requestId` must appear in all logs produced while handling that request, including outgoing-call, retry, fallback and error events. Every outgoing HTTP call must propagate the same ID in its `X-Request-Id` header; a downstream service must not create a new ID when one is already present. The same ID must appear in outgoing-call, retry, dependency-failure and error events.
 
-Events outside a request, such as startup, shutdown, scheduled health polling and heartbeats, omit `requestId`.
+Events outside a request, such as startup, shutdown and scheduled health polling, omit `requestId`. A heartbeat emitted by an instance itself also omits it; the corresponding incoming heartbeat request logged by Service Discovery is request-scoped and must include `requestId`.
 
 Additional context must be encoded as structured JSON fields rather than concatenated into the message. Use consistent camelCase names across services:
 
@@ -634,7 +634,6 @@ Additional context must be encoded as structured JSON fields rather than concate
 | `playerId` | Trusted player ID, when present |
 | `error` | Safe error description or code |
 | `stack` | Stack trace for an unexpected exception or 5xx error, when available |
-| `fallback` | Fallback used, such as `mock` |
 | `retryAttempt` | Retry number |
 | `state`, `reason` | Breaker state or decision reason, as applicable |
 
@@ -798,7 +797,7 @@ At minimum, log:
 
 - Every incoming HTTP request, including its method, path and trusted caller context when available, and every completed request with its HTTP status and `durationMs`.
 - Every outgoing call when it starts and finishes, including the target service, target instance when known, path, outcome, and duration.
-- Every outcome-changing branch: validation failure, not found, conflict, mock fallback, retry and dependency refusal.
+- Every outcome-changing branch: validation failure, not found, conflict, retry and dependency refusal. A failed dependency that prevents processing must be logged with its resulting error response.
 - Every error with safe diagnostic context and its cause.
 - Startup, shutdown, database connected/lost events, and Service Discovery registration, retry and deregistration.
 - Circuit-breaker state changes, trips and instance removals.
@@ -823,16 +822,18 @@ Bare `console.log`, `fmt.Println` and `print` statements are not permitted in se
 Request received:
 
 ```json
-{"timestamp":"2026-10-13T13:01:02.345Z","level":"INFO","service":"server-moderation-session-service","instanceId":"server-moderation-session-service-ab12cd","requestId":"req-a1b2","message":"request received","method":"POST","path":"/sessions/42/process-applicant","callerType":"player","playerId":"jun-1"}
+{"timestamp":"2026-10-13T13:01:02.345Z","level":"INFO","service":"session-service","instanceId":"session-service-ab12cd","requestId":"req-a1b2","message":"request received","method":"POST","path":"/sessions/42/process-applicant","callerType":"player","playerId":"jun-1"}
 ```
 
-Dependency failure and mock fallback:
+Dependency timeout and unavailable response:
 
 ```json
-{"timestamp":"2026-10-13T13:01:04.845Z","level":"WARN","service":"server-rules-service","instanceId":"server-rules-service-ab12cd","requestId":"req-a1b2","message":"outgoing call failed; using mock data","targetService":"university-record-service","path":"/university-record/records","error":"timeout","durationMs":2500,"fallback":"mock"}
+{"timestamp":"2026-10-13T13:01:04.845Z","level":"WARN","service":"server-rules-service","instanceId":"server-rules-service-ab12cd","requestId":"req-a1b2","message":"outgoing call failed","targetService":"university-record-service","path":"/university-record/records","error":"timeout","durationMs":2500}
+{"timestamp":"2026-10-13T13:01:04.846Z","level":"ERROR","service":"server-rules-service","instanceId":"server-rules-service-ab12cd","requestId":"req-a1b2","message":"request completed","path":"/rules/evaluate","status":503,"error":"DEPENDENCY_UNAVAILABLE","durationMs":2500}
 ```
 
 All examples use the same field names and timestamp representation. A service that does not know the selected target instance must omit `targetInstanceId` rather than invent one.
+
 ## Development Guidelines
  
 ### Git Workflow & Branch Strategy
