@@ -186,18 +186,18 @@ This has a few direct consequences for how the system behaves:
  
 #### Gateway
 
-The single entry point of the system (Lab 2). Clients call `http://localhost:3000/<prefix>/<service path>`; the Gateway strips the prefix, forwards the request to the service that owns it, and returns that service's status and body unchanged. Response headers pass through too, except hop-by-hop headers and `Content-Length`, `Content-Encoding`, `Date` and `Server`, which the Gateway sets itself; it also adds `X-Request-Id`.
+The single entry point of the system (Lab 2). Clients call `http://localhost:3000/<prefix>/<service path>`; the Gateway strips the prefix, forwards the request to a healthy instance of the service that owns it, and returns that service's status and body unchanged. Response headers pass through too, except hop-by-hop headers and `Content-Length`, `Content-Encoding`, `Date` and `Server`, which the Gateway sets itself; it also adds `X-Request-Id` and `X-Instance-Id`.
 
-| Prefix | Service | Upstream in docker-compose (env var) |
-|---|---|---|
-| `/player` | Player Service | `http://player-service:3001` (`PLAYER_SERVICE_URL`) |
-| `/session` | Server Moderation Session Service | `http://session-service:3002` (`SESSION_SERVICE_URL`) |
-| `/applicant` | Applicant Service | `http://applicant-service:3003` (`APPLICANT_SERVICE_URL`) |
-| `/credential` | Credential Service | `http://credential-service:3004` (`CREDENTIAL_SERVICE_URL`) |
-| `/server-rules` | Server Rules Service | `http://server-rules-service:3005` (`RULES_SERVICE_URL`) |
-| `/university-record` | University Record Service | `http://university-record-service:3006` (`UNIVERSITY_RECORD_SERVICE_URL`) |
-| `/moderation` | Moderation Service | `http://moderation-service:3007` (`MODERATION_SERVICE_URL`) |
-| `/discord-dms` | Discord DMs Service | `http://discord-dms-service:3009` (`DISCORD_DMS_SERVICE_URL`) — its REST port; `3008` serves only the WebSocket |
+| Prefix | Service | Service Discovery name | Fixed upstream while `SERVICE_DISCOVERY_URL` is unset (env var) |
+|---|---|---|---|
+| `/player` | Player Service | `player-service` | `http://player-service:3001` (`PLAYER_SERVICE_URL`) |
+| `/session` | Server Moderation Session Service | `session-service` | `http://session-service:3002` (`SESSION_SERVICE_URL`) |
+| `/applicant` | Applicant Service | `applicant-service` | `http://applicant-service:3003` (`APPLICANT_SERVICE_URL`) |
+| `/credential` | Credential Service | `credential-service` | `http://credential-service:3004` (`CREDENTIAL_SERVICE_URL`) |
+| `/server-rules` | Server Rules Service | `server-rules-service` | `http://server-rules-service:3005` (`RULES_SERVICE_URL`) |
+| `/university-record` | University Record Service | `university-record-service` | `http://university-record-service:3006` (`UNIVERSITY_RECORD_SERVICE_URL`) |
+| `/moderation` | Moderation Service | `moderation-service` | `http://moderation-service:3007` (`MODERATION_SERVICE_URL`) |
+| `/discord-dms` | Discord DMs Service | `discord-dms-service` | `http://discord-dms-service:3009` (`DISCORD_DMS_SERVICE_URL`) — its REST port; `3008` serves only the WebSocket |
 
 | Method | Path | Request | Response |
 |---|---|---|---|
@@ -217,7 +217,11 @@ Notes for callers:
   - The Gateway authenticates; it does not decide what a caller may do. A service that needs to (for example "only the author may delete this message") uses `X-Player-Id` and `X-Caller-Type`, which a client cannot forge because the Gateway removes client-sent copies.
   - Rollout: while `JWT_SECRET` is unset on the Gateway nothing is enforced and requests pass as before, so Player Service, the other services and the Postman collections can adopt this independently. `JWT_SECRET` and `SERVICE_TOKEN` are set together: the Gateway refuses to start when only one of them is set, and logs a warning at startup when neither is, so a stack without authentication is never silent. In the shared stack both are set, and `docker compose` refuses to start without them. They must be two different values (the Gateway refuses to start when they are equal), so a leaked service token cannot be used to sign a player token. Every Postman collection then registers and logs in a player through the Gateway first and sends that token on its requests.
 - Every forwarded request carries `X-Request-Id` (kept if the client sent one, otherwise generated, and returned in the response), plus `X-Forwarded-Prefix` and `X-Forwarded-For`.
-- The Gateway waits `UPSTREAM_TIMEOUT_MS` (default `10000`) for a service before giving up.
+- The Gateway waits `UPSTREAM_TIMEOUT_MS` (default `10000`) for a service before giving up, or less on a service call that sends `X-Timeout-Ms` (below).
+- **Routing to instances (Lab 3).** The Gateway takes the instances of each service from Service Discovery (`GET /services`, every `SD_REFRESH_MS`, default `2000`) and keeps only those in state `healthy`. Requests to one prefix go to its healthy instances in turn (round-robin, in `instanceId` order). If Service Discovery cannot be reached, the Gateway keeps routing with the last list it received and logs a warning; if it has no healthy instance for a service, it answers `502 BAD_GATEWAY` without `X-Instance-Id`. While `SERVICE_DISCOVERY_URL` is unset, the Gateway uses the fixed upstreams in the table above, as in Lab 2. The Gateway registers itself in Service Discovery as `gateway` with `statusPath` `/status` and behaves like every instance: it sends a heartbeat every `SD_HEARTBEAT_MS`, registers again when a heartbeat answers `404`, and deregisters on shutdown, so it is health-polled and never evicted while it runs. It fetches the list once at startup, which compose starts only after Service Discovery is healthy; until a service has a healthy instance in that list, requests to it get `502 BAD_GATEWAY` without `X-Instance-Id`.
+- **`X-Instance-Id`.** Every forwarded response carries the `instanceId` of the instance that answered; the Gateway sets it and replaces any value the service sent. Its own `502 BAD_GATEWAY` and `504 GATEWAY_TIMEOUT` for an instance carry that instance's id too. Every other answer the Gateway gives itself (`401`, `403`, `404 ROUTE_NOT_FOUND`, `503`, and `502` with no healthy instance) has none. A caller's circuit breaker counts failures per `X-Instance-Id` (see Circuit Breaker). While `SERVICE_DISCOVERY_URL` is unset, the Gateway knows no instances and forwarded responses carry no `X-Instance-Id`, so callers count every failure per callee, as before Lab 3.
+- **`X-Timeout-Ms`.** A service sends its `HTTP_TIMEOUT_MS` as `X-Timeout-Ms` on every outgoing call. On a call made with the service token, the Gateway gives up on the instance after `X-Timeout-Ms − 200` ms (never later than `UPSTREAM_TIMEOUT_MS`) and answers `504 GATEWAY_TIMEOUT` with the instance's `X-Instance-Id`, so a replica that never answers is counted against itself. A value that is not an integer above `200` is ignored. On any other call the header is removed and `UPSTREAM_TIMEOUT_MS` applies, so a client cannot shorten timeouts and make healthy instances look broken. The header is never forwarded to the service.
+- **The Gateway's own circuit breaker (Lab 3, grades 7 and 10)** follows the shared rules in Circuit Breaker, per instance, with a window of `UPSTREAM_TIMEOUT_MS × 3.5` (`35000`). It counts a timeout only when its own `UPSTREAM_TIMEOUT_MS` ran out; a `504` given because of a caller's `X-Timeout-Ms` is counted by that caller alone. In `BREAKER_MODE=remove` it reports the instance to Service Discovery with `reporter` `gateway` and stops routing to it at once, without waiting for the next refresh.
 - Timeout budget of the shared stack (Lab 2, grade 8). A caller must never give up on work the callee is still doing, so on every hop the caller's outgoing call timeout is larger than the callee's `TASK_TIMEOUT_MS`, and a service's own `TASK_TIMEOUT_MS` is larger than its outgoing call timeout. Values are what `docker-compose.yml` sets; an image run without them falls back to its own defaults.
 
   | Service | Outgoing call timeout | `TASK_TIMEOUT_MS` |
@@ -241,10 +245,10 @@ Notes for callers:
   | `401` | `UNAUTHORIZED` | a non-public route was called without a valid `Authorization: Bearer` token (missing, malformed, wrongly signed, expired, or another issuer); sent with `WWW-Authenticate: Bearer`, the request is not forwarded |
   | `403` | `FORBIDDEN` | `POST /ws/negotiate` was called with the service token: a service has no player to issue a ticket for. This is the one route the Gateway answers itself, so it is the only place the Gateway produces this code; a `403` on a forwarded route is the service's own |
   | `404` | `ROUTE_NOT_FOUND` | the first path segment is not a known prefix |
-  | `502` | `BAD_GATEWAY` | the service is unreachable |
+  | `502` | `BAD_GATEWAY` | the instance is unreachable (with its `X-Instance-Id`), or Service Discovery lists no healthy instance of the service (without one) |
   | `503` | `CONCURRENCY_LIMIT_REACHED` | `MAX_CONCURRENT_TASKS` requests are already in progress; sent with `Retry-After: 1`, the request is not forwarded |
   | `503` | `WS_NEGOTIATION_DISABLED` | `POST /ws/negotiate` was called while `WS_TICKET_SECRET` is unset. Unlike `CONCURRENCY_LIMIT_REACHED`, retrying never helps: it is a configuration state, not load. Like the pair on `502`, the two `503`s are told apart by their code |
-  | `504` | `GATEWAY_TIMEOUT` | the service did not answer within `UPSTREAM_TIMEOUT_MS` |
+  | `504` | `GATEWAY_TIMEOUT` | the instance did not answer within `UPSTREAM_TIMEOUT_MS`, or within `X-Timeout-Ms − 200` on a service call; carries the instance's `X-Instance-Id` |
 
   Errors produced by a service (e.g. its `404 NOT_FOUND` for a missing resource) pass through unchanged, so `ROUTE_NOT_FOUND` always means a wrong prefix, never a missing resource.
 
