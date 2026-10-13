@@ -132,6 +132,7 @@ Every relationship below is a REST call sent through the Gateway, which forwards
 - **Credential Service** looks up the applicant in Applicant Service.
 - **Server Rules Service** reads from University Record Service the records it needs to evaluate the rules.
 - **Player Service** and **University Record Service** call no other service.
+- Applicant, Credential and University Record Service are meant to create each other's records for a new applicant (mutual initialization, see Data Management Across Microservices); no service does this yet, so the diagram does not show it.
 
 ## Tech Stack & Communication Patterns
 
