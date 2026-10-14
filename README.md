@@ -581,6 +581,62 @@ Notes for callers:
 - The service listens on two ports: `WS_PORT` (`3008`) serves `/ws/...` alone and is the only one published, because a client connects to the socket directly after negotiating with the Gateway; `HTTP_PORT` (`3009`) serves every REST endpoint and `/status` and stays inside the network, so REST can only arrive through the Gateway. Anything that is not the socket on the WebSocket port answers `404` in the shared error envelope.
 - Errors come back as `{error: {code: string, message: string}}`.
 
+### Circuit Breaker
+
+Every service that calls another service wraps those calls in a circuit breaker (Lab 3, grades 7 and 10). These rules are shared: the Node services copy one reference implementation, Discord DMs and Moderation implement the same behaviour in Go, and the Gateway applies it to its upstreams. No call to Service Discovery is wrapped: not `register`, `heartbeat`, `DELETE` or `report` from the services, and not Service Discovery's own health polls. Moderation's verdict announcement to Discord DMs is not wrapped either: it is best-effort (see the timeout budget), so its failures are logged at `WARN` and never counted.
+
+This section replaces the mock fallbacks still described in the service sections and in the Gateway notes above; each owner removes them from their section with the change that removes the mock from their service.
+
+**Threshold.** A breaker trips after **3 failures within a window of `HTTP_TIMEOUT_MS × 3.5`**, counted over a sliding window. A failure is timestamped when the caller observes it (for a timeout, when the timeout fires), and successes in between do not clear the window; only time does. The window comes from `HTTP_TIMEOUT_MS` because that is the limit of the call the breaker wraps and the caller knows it, while it does not know the callee's `TASK_TIMEOUT_MS`. Windows in the shared stack:
+
+| Caller → callee | `HTTP_TIMEOUT_MS` | Window |
+|---|---|---|
+| Server Rules → University Record | `2500` | `8750` |
+| Applicant → University Record | `2500` | `8750` |
+| Credential → Applicant | `3500` | `12250` |
+| Server Moderation Session → Player, Applicant, Credential, Server Rules, University Record | `4500` | `15750` |
+| Moderation → Applicant, Credential, Server Rules, University Record | `4500` | `15750` |
+| Discord DMs → Server Moderation Session | `8500` | `29750` |
+| Gateway → every service (`UPSTREAM_TIMEOUT_MS`) | `10000` | `35000` |
+
+A service whose timeout changes takes the new window with it; implementations compute the window from the timeout instead of hard-coding the number.
+
+**The caller's timeout goes to the Gateway.** Every outgoing call sends `X-Timeout-Ms: <HTTP_TIMEOUT_MS>`. The Gateway gives up on the instance `200` ms before that (and never later than `UPSTREAM_TIMEOUT_MS`) and answers `504 GATEWAY_TIMEOUT` with that instance's `X-Instance-Id`, so a replica that accepts connections but never answers is counted against itself, not against the whole service. `HTTP_TIMEOUT_MS − 200` stays above the callee's `TASK_TIMEOUT_MS` on every wrapped hop of the timeout budget, so a callee is still never cut off before its own task timeout. A timeout on the caller's side, with no response at all, then means the Gateway itself did not answer.
+
+The Gateway honours `X-Timeout-Ms` only on calls made with the service token, and removes a client-sent one like the `X-Caller-*` headers; client requests keep `UPSTREAM_TIMEOUT_MS`. Otherwise a client could send a tiny timeout and make healthy instances look like they time out. The Gateway's own breaker counts a timeout only when its own `UPSTREAM_TIMEOUT_MS` ran out: a `504 GATEWAY_TIMEOUT` it answered because of a caller's `X-Timeout-Ms` is counted by that caller alone, so one slow call is never counted twice.
+
+**What counts as a failure.** Decided by `error.code` when the response carries a code from this table, otherwise by status:
+
+| Counts | Does not count |
+|---|---|
+| no response: connection refused or reset, DNS failure, the call reaching `HTTP_TIMEOUT_MS` | every `4xx`, listed or not (`401`/`403` are a configuration error: logged at `ERROR`, never a reason to trip) |
+| `500 INTERNAL_ERROR` (the instance answers but is broken) | `502 DEPENDENCY_REFUSED` (a configuration error further down the chain) |
+| `502 BAD_GATEWAY` (the Gateway could not reach the instance, or has no healthy instance) | `503 CONCURRENCY_LIMIT_REACHED` (the instance is busy, not broken; removing it would load the others more) |
+| `504 GATEWAY_TIMEOUT`, `504 TASK_TIMEOUT` | `503 DEPENDENCY_UNAVAILABLE` (the callee is fine, its own dependency is not; counting it would push healthy instances up the chain out of rotation) |
+| any other `5xx`, whatever its code | `503 WS_NEGOTIATION_DISABLED`, `2xx`, `3xx`; a call cancelled by the caller's own task timeout |
+
+**Per instance, not per service.** Services call each other through the Gateway, so before a call a service cannot know which instance will answer, and blocking a whole service because one of its replicas is broken would also block the healthy ones. Failures are therefore counted in two places:
+
+- **Per instance**, keyed by callee and the `X-Instance-Id` of the response (set by the Gateway on forwarded responses and on its own `502`/`504` for an instance). When an instance reaches the threshold, the caller logs it and, in `remove` mode, reports it to Service Discovery (`POST /services/{serviceName}/instances/{instanceId}/report`, see Service Discovery). Calls are **not** blocked: the Gateway stops routing to the instance once Service Discovery marks it `removed`. The counter then starts again from zero, so a still-failing instance can be reported again; Service Discovery ignores reports for an instance that is already `removed`.
+- **Per callee**, for failures without an `X-Instance-Id`: the Gateway did not answer at all, or answered `502 BAD_GATEWAY` without an instance because it had no healthy one. This is the classic breaker:
+  - `closed`: calls go through.
+  - `open`: entered at the threshold, lasts one window. Calls are not sent; the caller answers at once with `503 DEPENDENCY_UNAVAILABLE` and `Retry-After` set to the seconds left until `half_open`.
+  - `half_open`: one trial call is sent; other calls meanwhile are answered as in `open`. A trial that ends in a counted failure without an `X-Instance-Id` opens the breaker again for another window; any other outcome (success, any `4xx`, an uncounted `5xx`, or a counted failure of one instance, which shows the Gateway reached it) closes it. A trial cancelled by the caller's own task timeout only frees the trial slot, so the next call becomes the trial.
+
+**What the caller answers.** When a dependency answers any `5xx`, counted or not, or does not answer, or the breaker is open, the caller answers `503 DEPENDENCY_UNAVAILABLE` in the shared envelope: never a `500`, which would be counted against a healthy caller, and never mock data. A refused dependency (`502 DEPENDENCY_REFUSED`, or a `401`, `403`, `422` or `404 ROUTE_NOT_FOUND` that shows a configuration error) is answered `502 DEPENDENCY_REFUSED` as before. A dependency whose URL is unset gets no mock either: the requests that need it answer `503 DEPENDENCY_UNAVAILABLE`, so a service run on its own serves what it can without the peer and refuses the rest. One breaker per caller and callee covers all of the callee's endpoints. State lives in each instance's memory: replicas of the same caller count independently.
+
+**Modes.** `BREAKER_MODE=log|remove`. `log` (grade 7) logs trips and keeps going; `remove` (grade 10) also reports the instance to Service Discovery. Until the Gateway sends `X-Instance-Id`, services run in `log`; the shared stack runs `remove` once it does.
+
+**Logs** (field names as in the logging convention):
+
+| Event | Level | Fields |
+|---|---|---|
+| a counted failure | `WARN` | `targetService`, `targetInstanceId` (when known), `reason`, `failures` (in the current window), `windowMs` |
+| instance threshold reached | `WARN` | `targetService`, `targetInstanceId`, `failures`, `windowMs`, `mode` |
+| instance reported to Service Discovery | `INFO`, or `WARN` if the report failed | `targetService`, `targetInstanceId`, `status` |
+| state change of the per-callee breaker | `WARN` to `open`, `INFO` to `half_open` and `closed` | `targetService`, `previousState`, `state`, `failures`, `windowMs` |
+| call rejected while `open` or `half_open` | `WARN` | `targetService`, `state`, `retryAfterSeconds` |
+
 ### Shared Enumerations and Field Formats
 
 These values are produced by Applicant Service and Credential Service and consumed by Server Rules Service, University Record Service and Moderation Service, so they are part of the contract rather than an implementation detail. Adding a value is additive and safe; renaming or removing one requires a PR here and acknowledgement from every consumer.
