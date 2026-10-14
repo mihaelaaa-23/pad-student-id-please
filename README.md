@@ -10,6 +10,7 @@ Team 18
 - [Architecture Diagram](#architecture-diagram)
 - [Tech Stack & Communication Patterns](#tech-stack--communication-patterns)
 - [Communication Contract](#communication-contract)
+- [Logging Convention](#logging-convention)
 - [Development Guidelines](#development-guidelines)
 - [Microservice Repositories](#microservice-repositories)
 - [Docker Images](#docker-images)
@@ -643,6 +644,242 @@ Which documents a role is expected to hold:
 | `outsider` | none |
 
 An outsider holding no university documents is therefore reported as `valid: true` with no issues. Credential Service validates documents, not admission: rejecting an outsider is Moderation Service's decision, based on the current server rules.
+
+## Logging Convention
+
+This is the proposed cross-service logging convention for Lab 3. It must be reviewed through this CPR pull request before it becomes the agreed team standard.
+
+### Output format and required fields
+
+Every log event is one JSON object on one line (JSON Lines). Output goes to standard output (`stdout`) so Docker Compose collects logs from all service instances. All fields defined by this convention use camelCase.
+
+Every event must contain these fields:
+
+| Field | Requirement |
+|---|---|
+| `timestamp` | ISO 8601 UTC with millisecond precision, for example `2026-10-13T13:01:02.345Z` |
+| `level` | Uppercase `DEBUG`, `INFO`, `WARN`, or `ERROR` |
+| `service` | Exact Compose/registry service name, such as `server-rules-service` |
+| `instanceId` | The instance ID in the form `<serviceName>-<hostname>`. It must be the same value registered with Service Discovery and returned in the `X-Instance-Id` response header |
+| `message` | Short, human-readable event description |
+| `requestId` | Required on every request-scoped event; omitted for events that do not belong to a request |
+
+The Gateway establishes `X-Request-Id` for a request. Each service preserves that value, or generates a UUID if a request arrives without one. The same `requestId` must appear in all logs produced while handling that request, including outgoing-call, retry, fallback and error events. Every outgoing HTTP call must propagate the same ID in its `X-Request-Id` header; a downstream service must not create a new ID when one is already present. The same ID must appear in outgoing-call, retry, dependency-failure and error events.
+
+Events outside a request, such as startup, shutdown and scheduled health polling, omit `requestId`. A heartbeat emitted by an instance itself also omits it; the corresponding incoming heartbeat request logged by Service Discovery is request-scoped and must include `requestId`.
+
+Additional context must be encoded as structured JSON fields rather than concatenated into the message. Use consistent camelCase names across services:
+
+| Field | Meaning |
+|---|---|
+| `method`, `path` | HTTP method and path; do not log sensitive query parameters |
+| `status` | HTTP response status code |
+| `durationMs` | Duration in milliseconds |
+| `targetService` | Target Compose/registry service name |
+| `targetInstanceId` | Target instance ID, when known |
+| `callerType` | Trusted caller type, `player` or `service`, when known |
+| `playerId` | Trusted player ID, when present |
+| `error` | Safe error description or code |
+| `stack` | Stack trace for an unexpected exception or 5xx error, when available |
+| `retryAttempt` | Retry number |
+| `state`, `reason` | Breaker state or decision reason, as applicable |
+
+The Gateway must log the actual upstream instance it selects. A caller that only knows it called the Gateway must not invent the underlying target instance ID.
+
+`callerType` and `playerId` must come from trusted, authenticated context. Private services may use the caller headers set by the Gateway (`X-Caller-Type` and `X-Player-Id`). The Gateway must derive these fields from the authenticated request, never from untrusted client-supplied caller headers.
+
+### Logger libraries and configuration
+
+Each service configures its logger once in a dedicated module and uses that logger throughout the codebase. The `LOG_LEVEL` environment variable controls the minimum emitted level. Its default is `INFO`; accepted values are `DEBUG`, `INFO`, `WARN`, and `ERROR`.
+
+| Language | Required logging library/configuration |
+|---|---|
+| Node.js | Pino, configured to emit the required JSON fields |
+| Go | Standard library `log/slog` with a JSON handler and a field-normalizing handler option |
+| Python | Standard library `logging` with a JSON formatter |
+
+The libraries' defaults must be normalized to this convention: the timestamp field is named `timestamp` and uses the required UTC format, the level is an uppercase string named `level`, and the message is named `message`. Do not expose library-specific default field names such as Pino's `time` or `msg`, or Python's `WARNING` level name.
+
+#### Node.js / Pino reference configuration
+
+Use the exact service name for each service. This example shows the base logger; request middleware must create a request-scoped logger containing `requestId` and the trusted caller context.
+
+```javascript
+const os = require('node:os');
+const pino = require('pino');
+
+const service = 'server-rules-service'; // Set per service.
+const instanceId = `${service}-${os.hostname()}`;
+
+const logger = pino({
+  level: (process.env.LOG_LEVEL || 'INFO').toLowerCase(),
+  messageKey: 'message',
+  base: { service, instanceId },
+  timestamp: () => `,"timestamp":"${new Date().toISOString()}"`,
+  formatters: {
+    level(label) {
+      if (label === 'fatal') return { level: 'ERROR' };
+      if (label === 'trace') return { level: 'DEBUG' };
+      return { level: label.toUpperCase() };
+    },
+  },
+});
+
+module.exports = { logger, service, instanceId };
+```
+
+For each request, attach `requestId` and any trusted `callerType` or `playerId` to a child logger. Use that child logger in the request path so every related event carries the same context.
+
+#### Go / `log/slog` reference configuration
+
+Compute `instanceId` as `<serviceName>-<hostname>` and pass the resulting values into this logger factory:
+
+```go
+func newLogger(service, instanceID string) *slog.Logger {
+    var level slog.LevelVar
+
+    switch strings.ToUpper(os.Getenv("LOG_LEVEL")) {
+    case "DEBUG":
+        level.Set(slog.LevelDebug)
+    case "WARN":
+        level.Set(slog.LevelWarn)
+    case "ERROR":
+        level.Set(slog.LevelError)
+    default:
+        level.Set(slog.LevelInfo)
+    }
+
+    handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+        Level: &level,
+        ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+            switch a.Key {
+            case slog.TimeKey:
+                return slog.String(
+                    "timestamp",
+                    a.Value.Time().UTC().Format("2006-01-02T15:04:05.000Z"),
+                )
+            case slog.LevelKey:
+                return slog.String("level", strings.ToUpper(a.Value.String()))
+            case slog.MessageKey:
+                return slog.String("message", a.Value.String())
+            }
+            return a
+        },
+    })
+
+    return slog.New(handler).With(
+        "service", service,
+        "instanceId", instanceID,
+    )
+}
+```
+
+Import `log/slog`, `os`, and `strings`. Attach request-specific attributes with `logger.With("requestId", requestID, ...)` and propagate the same `X-Request-Id` on outgoing calls.
+
+#### Python / `logging` reference configuration
+
+Configure the service name and instance ID at startup. Use a formatter that renames `WARNING` to `WARN` and emits the required timestamp, `level`, `service`, `instanceId` and `message` fields.
+
+```python
+import json
+import logging
+import os
+import socket
+import sys
+from datetime import datetime, timezone
+
+SERVICE = "gateway"  # Set per service.
+INSTANCE_ID = f"{SERVICE}-{socket.gethostname()}"
+
+LEVELS = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARN": logging.WARNING,
+    "ERROR": logging.ERROR,
+}
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record):
+        event = {
+            "timestamp": datetime.fromtimestamp(
+                record.created, timezone.utc
+            ).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+            "level": {
+                "WARNING": "WARN",
+                "CRITICAL": "ERROR",
+            }.get(record.levelname, record.levelname),
+            "service": SERVICE,
+            "instanceId": INSTANCE_ID,
+            "message": record.getMessage(),
+        }
+
+        event.update(getattr(record, "context", {}))
+
+        if record.exc_info and record.levelno >= logging.ERROR:
+            event["stack"] = self.formatException(record.exc_info)
+
+        return json.dumps(event, separators=(",", ":"), ensure_ascii=False)
+
+logger = logging.getLogger(SERVICE)
+logger.setLevel(LEVELS.get(os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO))
+
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(JsonFormatter())
+logger.handlers.clear()
+logger.addHandler(handler)
+logger.propagate = False
+```
+
+Attach request-scoped fields through a logger adapter or logging context. Only add `requestId`, `callerType` and `playerId` when applicable.
+
+For the Python services using Uvicorn, disable the default access log (`access_log=False` or `--no-access-log`) if application middleware already logs request receipt and completion. Otherwise, route the access logger through the same JSON formatter. Avoid duplicate access lines and ensure operational server logs also conform to the required format.
+
+These snippets are reference configurations, not substitutes for service-specific request middleware and error handling. Each implementation must follow the same output contract.
+
+### Required logging coverage
+
+Every code path in every service must use the configured logger, including existing Lab 1 and Lab 2 behavior and all new Lab 3 functionality.
+
+At minimum, log:
+
+- Every incoming HTTP request, including its method, path and trusted caller context when available, and every completed request with its HTTP status and `durationMs`.
+- Every outgoing call when it starts and finishes, including the target service, target instance when known, path, outcome, and duration.
+- Every outcome-changing branch: validation failure, not found, conflict, retry and dependency refusal. A failed dependency that prevents processing must be logged with its resulting error response.
+- Every error with safe diagnostic context and its cause.
+- Startup, shutdown, database connected/lost events, and Service Discovery registration, retry and deregistration.
+- Circuit-breaker state changes, trips and instance removals.
+- In Service Discovery, every unhealthy or critical health-poll result and every health alert sent.
+
+Request receipt and completion logs for `/health` and `/status` must use `DEBUG` to avoid overwhelming operational logs. These request-scoped events still carry `requestId`. A failed database check, unhealthy health-poll result or critical condition must still be logged at an appropriate severity, such as `WARN` or `ERROR`; it must not be hidden by the access-log level.
+
+Use levels consistently: `DEBUG` for detailed diagnostics and health/status access logs, `INFO` for normal request and lifecycle events, `WARN` for degraded conditions and recoverable failures, and `ERROR` for errors requiring attention.
+
+Include a `stack` field for unexpected exceptions and 5xx errors when a stack is available. Expected 4xx responses (such as validation, authorization or not-found errors) do not need a stack trace.
+
+Do not silently ignore failed operations or decision branches.
+
+### Security requirements
+
+Never log passwords, access tokens, JWTs, signing secrets, webhook URLs, authorization headers or other secrets. Do not log complete request bodies by default. Include only the safe contextual information needed to diagnose an event.
+
+Bare `console.log`, `fmt.Println` and `print` statements are not permitted in service code. All operational messages must go through the configured logger.
+
+### Examples
+
+Request received:
+
+```json
+{"timestamp":"2026-10-13T13:01:02.345Z","level":"INFO","service":"session-service","instanceId":"session-service-ab12cd","requestId":"req-a1b2","message":"request received","method":"POST","path":"/sessions/42/process-applicant","callerType":"player","playerId":"jun-1"}
+```
+
+Dependency timeout and unavailable response:
+
+```json
+{"timestamp":"2026-10-13T13:01:04.845Z","level":"WARN","service":"server-rules-service","instanceId":"server-rules-service-ab12cd","requestId":"req-a1b2","message":"outgoing call failed","targetService":"university-record-service","path":"/university-record/records","error":"timeout","durationMs":2500}
+{"timestamp":"2026-10-13T13:01:04.846Z","level":"ERROR","service":"server-rules-service","instanceId":"server-rules-service-ab12cd","requestId":"req-a1b2","message":"request completed","path":"/rules/evaluate","status":503,"error":"DEPENDENCY_UNAVAILABLE","durationMs":2500}
+```
+
+All examples use the same field names and timestamp representation. A service that does not know the selected target instance must omit `targetInstanceId` rather than invent one.
 
 ## Development Guidelines
  
