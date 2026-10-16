@@ -38,6 +38,17 @@ services:
       # nothing outside this network, and this URL is handed to the client.
       DISCORD_DMS_WS_PUBLIC_URL: ws://localhost:3008
 
+  # ==================== Service Discovery (Ciprian) ====================
+  # Internal registry; no host port is published. This image defines its own
+  # Docker health check on /health.
+  service-discovery:
+    image: ciprik13/service-discovery:3.0.0-rc.5
+    restart: unless-stopped
+    environment:
+      PORT: 3010
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
+      LOG_LEVEL: ${SERVICE_DISCOVERY_LOG_LEVEL:-INFO}
+
   # ==================== Player Service (Mihaela) ====================
   player-service:
     image: mihaela5/player-service:2.0.0
@@ -266,8 +277,10 @@ services:
       retries: 5
 
   # ==================== University Record Service (Ion) ====================
+  # Build the merged Lab 3 implementation from the CPR submodule.
   university-record-service:
-    image: ion190/university-record-service:2.0.0
+    build:
+      context: ./services/university-record-service
     restart: unless-stopped
     environment:
       PORT: 3006
@@ -278,8 +291,13 @@ services:
       DB_NAME: ${UNIVERSITY_RECORD_DB_NAME}
       TASK_TIMEOUT_MS: ${UNIVERSITY_RECORD_TASK_TIMEOUT_MS:-2000}
       MAX_CONCURRENT_TASKS: ${UNIVERSITY_RECORD_MAX_CONCURRENT_TASKS:-50}
+      SERVICE_DISCOVERY_URL: http://service-discovery:3010
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
+      SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
     depends_on:
       university-record-db:
+        condition: service_healthy
+      service-discovery:
         condition: service_healthy
 
   university-record-db:
