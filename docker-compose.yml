@@ -278,7 +278,7 @@ services:
 
   # ==================== University Record Service (Ion) ====================
   university-record-service:
-    image: ion190/university-record-service:3.0.0-rc.1
+    image: ion190/university-record-service:2.0.0
     restart: unless-stopped
     environment:
       PORT: 3006
@@ -289,15 +289,9 @@ services:
       DB_NAME: ${UNIVERSITY_RECORD_DB_NAME}
       TASK_TIMEOUT_MS: ${UNIVERSITY_RECORD_TASK_TIMEOUT_MS:-2000}
       MAX_CONCURRENT_TASKS: ${UNIVERSITY_RECORD_MAX_CONCURRENT_TASKS:-50}
-      SERVICE_DISCOVERY_URL: http://service-discovery:3010
-      SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
-      SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
     depends_on:
       university-record-db:
         condition: service_healthy
-      service-discovery:
-        condition: service_started
-
   university-record-db:
     image: postgres:16-alpine
     restart: unless-stopped
