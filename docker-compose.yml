@@ -38,6 +38,17 @@ services:
       # nothing outside this network, and this URL is handed to the client.
       DISCORD_DMS_WS_PUBLIC_URL: ws://localhost:3008
 
+  # ==================== Service Discovery (Ciprian) ====================
+  # Internal registry; no host port is published. This image defines its own
+  # Docker health check on /health.
+  service-discovery:
+    image: ciprik13/service-discovery:3.0.0-rc.5
+    restart: unless-stopped
+    environment:
+      PORT: 3010
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
+      LOG_LEVEL: ${SERVICE_DISCOVERY_LOG_LEVEL:-INFO}
+
   # ==================== Player Service (Mihaela) ====================
   player-service:
     image: mihaela5/player-service:2.0.0
