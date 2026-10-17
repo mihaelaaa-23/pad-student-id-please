@@ -277,10 +277,8 @@ services:
       retries: 5
 
   # ==================== University Record Service (Ion) ====================
-  # Build the merged Lab 3 implementation from the CPR submodule.
   university-record-service:
-    build:
-      context: ./services/university-record-service
+    image: ion190/university-record-service:3.0.0-rc.1
     restart: unless-stopped
     environment:
       PORT: 3006
@@ -298,7 +296,7 @@ services:
       university-record-db:
         condition: service_healthy
       service-discovery:
-        condition: service_healthy
+        condition: service_started
 
   university-record-db:
     image: postgres:16-alpine
