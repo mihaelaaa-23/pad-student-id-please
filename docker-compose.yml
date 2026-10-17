@@ -292,6 +292,7 @@ services:
     depends_on:
       university-record-db:
         condition: service_healthy
+
   university-record-db:
     image: postgres:16-alpine
     restart: unless-stopped
