@@ -3,7 +3,7 @@ services:
   # The single entry point. It waits only for Service Discovery: it reads the instance
   # list from it at startup and answers 502 BAD_GATEWAY for a service until it is up.
   gateway:
-    image: mihaela5/gateway:3.0.0-rc.2
+    image: mihaela5/gateway:3.0.0-rc.3
     restart: unless-stopped
     ports:
       - "3000:3000"
@@ -45,9 +45,12 @@ services:
       # The address the *client* connects to. The in-network name above means
       # nothing outside this network, and this URL is handed to the client.
       DISCORD_DMS_WS_PUBLIC_URL: ws://localhost:3008
+    # service_started, not service_healthy: with no list from Service Discovery the Gateway
+    # routes to the fixed upstreams above, so Service Discovery failing to start does not
+    # take down the only entry point.
     depends_on:
       service-discovery:
-        condition: service_healthy
+        condition: service_started
 
   # ==================== Service Discovery (Ciprian) ====================
   # Internal registry; no host port is published. This image defines its own
