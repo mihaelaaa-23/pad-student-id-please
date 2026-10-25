@@ -25,6 +25,9 @@ Copies of the modules Applicant Service and Credential Service run in production
    const registration = registrationFromEnv({ serviceName: SERVICE, instanceId, hostname: os.hostname(), port: PORT, log: logger });
    const server = app.listen(PORT, () => { if (registration) registration.start(); });
    process.on('SIGTERM', () => {
+     // Docker kills the container 10 s after SIGTERM; exit on our own well before that,
+     // even if deregistering or closing the server hangs.
+     setTimeout(() => process.exit(1), 5000).unref();
      (registration ? registration.stop() : Promise.resolve()).finally(() => server.close(() => process.exit(0)));
    });
    ```
@@ -56,14 +59,24 @@ Copies of the modules Applicant Service and Credential Service run in production
 
    ```javascript
    const { computeLoad, criticalPercentFromEnv } = require('./lib/load');
+   const { logger, SERVICE } = require('./lib/logger');
 
    // The Lab 2 concurrency limiter; it must expose how many requests it holds.
    const limiter = concurrencyLimit({ maxConcurrentTasks });
    // limiter.inFlight() -> number
-   const criticalPercent = criticalPercentFromEnv();
+   // Read once at startup; a set but invalid value is logged at WARN.
+   const criticalPercent = criticalPercentFromEnv(process.env.LOAD_CRITICAL_PERCENT, logger);
    app.get('/status', async (req, res) => {
+     const time = new Date().toISOString();
      const load = computeLoad({ inFlight: limiter.inFlight(), maxConcurrent: maxConcurrentTasks, criticalPercent });
-     res.json({ service: SERVICE, status: 'ok', database: 'up', time: new Date().toISOString(), load });
+     try {
+       await checkDatabase();   // your real check, with a timeout (a ping, SELECT 1, ...)
+       res.json({ service: SERVICE, status: 'ok', database: 'up', time, load });
+     } catch (err) {
+       logger.error({ database: 'down', error: err.message }, 'database check failed');
+       // The contract: 503 when the database is down, which Service Discovery counts as a failed poll.
+       res.status(503).json({ service: SERVICE, status: 'degraded', database: 'down', time, load });
+     }
    });
    app.use(limiter);
    ```
