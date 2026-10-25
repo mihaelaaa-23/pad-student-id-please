@@ -396,7 +396,7 @@ services:
       # Lab 3, grades 7 and 10: log a tripped instance, or also take it out of rotation.
       BREAKER_MODE: ${BREAKER_MODE:-log}
       # Lab 3, grade 3: DEBUG, INFO, WARN or ERROR.
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${MODERATION_LOG_LEVEL:-INFO}
       DB_HOST: moderation-db
       DB_PORT: 5432
       DB_USER: ${MODERATION_DB_USER}
@@ -463,7 +463,7 @@ services:
       # Lab 3, grades 7 and 10: log a tripped instance, or also take it out of rotation.
       BREAKER_MODE: ${BREAKER_MODE:-log}
       # Lab 3, grade 3: DEBUG, INFO, WARN or ERROR.
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_LEVEL: ${DISCORD_DMS_LOG_LEVEL:-INFO}
     depends_on:
       discord-dms-db:
         condition: service_healthy
