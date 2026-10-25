@@ -1,0 +1,17 @@
+{
+  "name": "pad-node-reference",
+  "private": true,
+  "description": "Reference logger, request context, circuit breaker and Service Discovery client for the Node services (Lab 3)",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "pino": "^10.3.1"
+  },
+  "devDependencies": {
+    "express": "^4.21.2"
+  }
+}
