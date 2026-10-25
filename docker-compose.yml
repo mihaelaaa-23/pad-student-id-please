@@ -177,7 +177,7 @@ services:
 
   # ==================== Applicant Service (Ciprian) ====================
   applicant-service:
-    image: ciprik13/applicant-service:3.0.0-rc.1
+    image: ciprik13/applicant-service:3.0.0-rc.2
     restart: unless-stopped
     # Lab 3, grade 5: two instances, sharing applicant-db (STORE_DRIVER mongo).
     deploy:
@@ -203,6 +203,9 @@ services:
       HTTP_TIMEOUT_MS: ${APPLICANT_HTTP_TIMEOUT_MS:-2500}
       TASK_TIMEOUT_MS: ${APPLICANT_TASK_TIMEOUT_MS:-3000}
       MAX_CONCURRENT_TASKS: ${APPLICANT_MAX_CONCURRENT_TASKS:-50}
+      # Lab 3, grade 8: the share of MAX_CONCURRENT_TASKS at which /status reports
+      # load.critical, which Service Discovery alerts on (same rule as Moderation).
+      LOAD_CRITICAL_PERCENT: ${APPLICANT_LOAD_CRITICAL_PERCENT:-80}
       # Lab 2, grade 10: sent as Authorization: Bearer on every outgoing call, so the
       # Gateway lets this service's own requests through.
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
@@ -235,7 +238,7 @@ services:
 
   # ==================== Credential Service (Ciprian) ====================
   credential-service:
-    image: ciprik13/credential-service:3.0.0-rc.1
+    image: ciprik13/credential-service:3.0.0-rc.2
     restart: unless-stopped
     # Lab 3, grade 5: two instances, sharing credential-db (STORE_DRIVER mongo).
     deploy:
@@ -263,6 +266,9 @@ services:
       HTTP_TIMEOUT_MS: ${CREDENTIAL_HTTP_TIMEOUT_MS:-3500}
       TASK_TIMEOUT_MS: ${CREDENTIAL_TASK_TIMEOUT_MS:-4000}
       MAX_CONCURRENT_TASKS: ${CREDENTIAL_MAX_CONCURRENT_TASKS:-50}
+      # Lab 3, grade 8: the share of MAX_CONCURRENT_TASKS at which /status reports
+      # load.critical, which Service Discovery alerts on (same rule as Moderation).
+      LOAD_CRITICAL_PERCENT: ${CREDENTIAL_LOAD_CRITICAL_PERCENT:-80}
       # Lab 2, grade 10: sent as Authorization: Bearer on every outgoing call, so the
       # Gateway lets this service's own requests through.
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
