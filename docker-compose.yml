@@ -363,8 +363,13 @@ services:
 
   # ==================== Moderation Service (Liviu) ====================
   moderation-service:
-    image: d3adeye/moderation-service:2.0.0
+    image: d3adeye/moderation-service:3.0.0-rc.1
     restart: unless-stopped
+    # Lab 3, grade 5: two instances. Each registers its own container hostname with
+    # Service Discovery, so there is no fixed host port and no container_name. The
+    # audit trail lives in moderation-db, so any instance can serve any decision.
+    deploy:
+      replicas: ${MODERATION_REPLICAS:-2}
     # Not published: every REST call reaches this service through the Gateway,
     # at http://localhost:3000/moderation.
     environment:
@@ -382,6 +387,16 @@ services:
       HTTP_TIMEOUT_MS: ${MODERATION_HTTP_TIMEOUT_MS:-4500}
       TASK_TIMEOUT_MS: ${MODERATION_TASK_TIMEOUT_MS:-8000}
       MAX_CONCURRENT_TASKS: ${MODERATION_MAX_CONCURRENT_TASKS:-50}
+      # Lab 3, grade 8: the share of MAX_CONCURRENT_TASKS at which /status reports
+      # load.critical, which Service Discovery alerts on.
+      LOAD_CRITICAL_PERCENT: ${MODERATION_LOAD_CRITICAL_PERCENT:-80}
+      # Lab 3, grades 4-5: register on startup, heartbeat, deregister on shutdown.
+      SERVICE_DISCOVERY_URL: http://service-discovery:3010
+      SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
+      # Lab 3, grades 7 and 10: log a tripped instance, or also take it out of rotation.
+      BREAKER_MODE: ${BREAKER_MODE:-log}
+      # Lab 3, grade 3: DEBUG, INFO, WARN or ERROR.
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
       DB_HOST: moderation-db
       DB_PORT: 5432
       DB_USER: ${MODERATION_DB_USER}
@@ -390,6 +405,8 @@ services:
     depends_on:
       moderation-db:
         condition: service_healthy
+      service-discovery:
+        condition: service_started
 
   moderation-db:
     image: postgres:16-alpine
@@ -409,8 +426,10 @@ services:
 
   # ==================== Discord DMs Service (Liviu) ====================
   discord-dms-service:
-    image: d3adeye/discord-dms-service:2.0.0
+    image: d3adeye/discord-dms-service:3.0.0-rc.1
     restart: unless-stopped
+    # One instance on purpose (Lab 3, grade 5): 3008 is published to the host, and a
+    # message sent to one replica would not reach sockets connected to another.
     # Only the WebSocket port is published. A client negotiates with the Gateway
     # and then connects to the socket directly, rather than keeping the Gateway
     # busy proxying a long-lived connection. REST lives on 3009, which stays
@@ -432,9 +451,24 @@ services:
       HTTP_TIMEOUT_MS: ${DISCORD_DMS_HTTP_TIMEOUT_MS:-8500}
       TASK_TIMEOUT_MS: ${DISCORD_DMS_TASK_TIMEOUT_MS:-9000}
       MAX_CONCURRENT_TASKS: ${DISCORD_DMS_MAX_CONCURRENT_TASKS:-50}
+      # Lab 3, grade 8: what counts as critical load. REST is a share of
+      # MAX_CONCURRENT_TASKS; sockets sit outside that limit, so they have a ceiling
+      # of their own. Either one makes the instance critical.
+      LOAD_CRITICAL_PERCENT: ${DISCORD_DMS_LOAD_CRITICAL_PERCENT:-80}
+      WS_CRITICAL_CONNECTIONS: ${DISCORD_DMS_WS_CRITICAL_CONNECTIONS:-500}
+      # Lab 3, grades 4-5: register on startup, heartbeat, deregister on shutdown.
+      # The REST port is registered, not the websocket one: that is where /status is.
+      SERVICE_DISCOVERY_URL: http://service-discovery:3010
+      SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
+      # Lab 3, grades 7 and 10: log a tripped instance, or also take it out of rotation.
+      BREAKER_MODE: ${BREAKER_MODE:-log}
+      # Lab 3, grade 3: DEBUG, INFO, WARN or ERROR.
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:
       discord-dms-db:
         condition: service_healthy
+      service-discovery:
+        condition: service_started
 
   discord-dms-db:
     image: mongo:7
