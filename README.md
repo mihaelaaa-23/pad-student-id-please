@@ -1088,6 +1088,14 @@ docker compose up -d --scale player-service=3
 docker compose logs -f gateway
 ```
 
+**I3 scaling smoke test (Server Rules and University Record).** With the shared stack running and at least two replicas of each service registered, run:
+
+```bash
+./scripts/test-i3-scaling.sh
+```
+
+The script sends `REQUESTS` status requests (default `10`) to each service through the Gateway. Every response must be HTTP `200`, include `X-Instance-Id`, and reach at least two distinct instances per service. Set `BASE_URL` to use another Gateway address (default `http://localhost:3000`), or set `REQUESTS=12` to collect more samples. This smoke test does not stop containers or modify application data. The circuit-breaker removal and recovery fault-injection test is separate because it temporarily takes one University Record replica offline.
+
 A replica stopped with `docker stop <container>` deregisters on `SIGTERM` and leaves the rotation at once. A frozen one (`docker pause <container>`) stays registered but fails its health polls: after 3 in a row (about 15 s) Service Discovery marks it `unhealthy` and the Gateway stops routing to it; after `docker unpause` and 3 good polls it is `healthy` again and gets traffic back. `BREAKER_MODE=log` in `.env` only logs a tripped circuit breaker; `remove` also reports the instance to Service Discovery, which takes it out of rotation (see Circuit Breaker).
 
 Each database runs `db/<service>/init.*` on first startup and persists its data in a named Docker volume, so data survives `docker compose down`. Use `docker compose down -v` to wipe it.
