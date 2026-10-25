@@ -304,8 +304,10 @@ services:
 
   # ==================== Server Rules Service (Ion) ====================
   server-rules-service:
-    image: ion190/server-rules-service:2.0.0
+    image: ion190/server-rules-service:3.0.0-rc.1
     restart: unless-stopped
+    deploy:
+      replicas: ${RULES_REPLICAS:-2}
     environment:
       PORT: 3005
       DB_HOST: rules-db
@@ -317,9 +319,16 @@ services:
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
       TASK_TIMEOUT_MS: ${RULES_TASK_TIMEOUT_MS:-3000}
       MAX_CONCURRENT_TASKS: ${RULES_MAX_CONCURRENT_TASKS:-50}
+      HTTP_TIMEOUT_MS: ${RULES_HTTP_TIMEOUT_MS:-2500}
+      BREAKER_MODE: ${BREAKER_MODE:-log}
+      LOAD_CRITICAL_PERCENT: ${RULES_LOAD_CRITICAL_PERCENT:-80}
+      SERVICE_DISCOVERY_URL: http://service-discovery:3010
+      SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
     depends_on:
       rules-db:
         condition: service_healthy
+      service-discovery:
+        condition: service_started
 
   rules-db:
     image: mongo:7
@@ -339,8 +348,10 @@ services:
 
   # ==================== University Record Service (Ion) ====================
   university-record-service:
-    image: ion190/university-record-service:2.0.0
+    image: ion190/university-record-service:3.0.0-rc.1
     restart: unless-stopped
+    deploy:
+      replicas: ${UNIVERSITY_RECORD_REPLICAS:-2}
     environment:
       PORT: 3006
       DB_HOST: university-record-db
@@ -350,9 +361,15 @@ services:
       DB_NAME: ${UNIVERSITY_RECORD_DB_NAME}
       TASK_TIMEOUT_MS: ${UNIVERSITY_RECORD_TASK_TIMEOUT_MS:-2000}
       MAX_CONCURRENT_TASKS: ${UNIVERSITY_RECORD_MAX_CONCURRENT_TASKS:-50}
+      LOAD_CRITICAL_PERCENT: ${UNIVERSITY_RECORD_LOAD_CRITICAL_PERCENT:-80}
+      SERVICE_DISCOVERY_URL: http://service-discovery:3010
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
+      SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
     depends_on:
       university-record-db:
         condition: service_healthy
+      service-discovery:
+        condition: service_started
 
   university-record-db:
     image: postgres:16-alpine
