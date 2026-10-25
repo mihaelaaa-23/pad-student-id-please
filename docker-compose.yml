@@ -1,14 +1,22 @@
 services:
   # ==================== Gateway (Mihaela) ====================
-  # The single entry point. No depends_on: the Gateway starts independently and
-  # answers 502 BAD_GATEWAY until a service is up.
+  # The single entry point. It waits only for Service Discovery: it reads the instance
+  # list from it at startup and answers 502 BAD_GATEWAY for a service until it is up.
   gateway:
-    image: mihaela5/gateway:2.0.0
+    image: mihaela5/gateway:3.0.0-rc.3
     restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
       PORT: 3000
+      # Lab 3, grades 5 and 6: requests go to the healthy instances Service Discovery
+      # lists, in turn. The fixed URLs below stay for a service that does not register
+      # yet (README, Gateway notes, "Routing to instances").
+      SERVICE_DISCOVERY_URL: http://service-discovery:3010
+      SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
+      # Lab 3, grades 7 and 10: log a tripped instance, or also take it out of rotation
+      # and report it (remove, once Service Discovery has the report endpoint).
+      BREAKER_MODE: ${BREAKER_MODE:-log}
       PLAYER_SERVICE_URL: http://player-service:3001
       SESSION_SERVICE_URL: http://session-service:3002
       APPLICANT_SERVICE_URL: http://applicant-service:3003
@@ -37,6 +45,12 @@ services:
       # The address the *client* connects to. The in-network name above means
       # nothing outside this network, and this URL is handed to the client.
       DISCORD_DMS_WS_PUBLIC_URL: ws://localhost:3008
+    # service_started, not service_healthy: with no list from Service Discovery the Gateway
+    # routes to the fixed upstreams above, so Service Discovery failing to start does not
+    # take down the only entry point.
+    depends_on:
+      service-discovery:
+        condition: service_started
 
   # ==================== Service Discovery (Ciprian) ====================
   # Internal registry; no host port is published. This image defines its own
@@ -51,8 +65,12 @@ services:
 
   # ==================== Player Service (Mihaela) ====================
   player-service:
-    image: mihaela5/player-service:2.0.0
+    image: mihaela5/player-service:3.0.0-rc.1
     restart: unless-stopped
+    # Lab 3, grade 5: two instances. Each registers its own container hostname with
+    # Service Discovery, so there is no fixed host port and no container_name.
+    deploy:
+      replicas: ${PLAYER_REPLICAS:-2}
     # Not published: every REST call reaches this service through the Gateway,
     # at http://localhost:3000/player.
     environment:
@@ -73,9 +91,15 @@ services:
       # The Gateway's authorization is on, so a protected route called without its
       # caller headers did not come through the Gateway: refuse it (401).
       REQUIRE_CALLER_HEADERS: "true"
+      # Lab 3: register on startup, heartbeat, deregister on shutdown.
+      SERVICE_DISCOVERY_URL: http://service-discovery:3010
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
+      SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
     depends_on:
       player-db:
         condition: service_healthy
+      service-discovery:
+        condition: service_started
 
   player-db:
     image: postgres:16-alpine
@@ -95,8 +119,12 @@ services:
 
   # ==================== Server Moderation Session Service (Mihaela) ====================
   session-service:
-    image: mihaela5/session-service:2.0.0
+    image: mihaela5/session-service:3.0.0-rc.1
     restart: unless-stopped
+    # Lab 3, grade 5: two instances; sessions live in session-db, so any instance can
+    # serve any session.
+    deploy:
+      replicas: ${SESSION_REPLICAS:-2}
     # Not published: every REST call reaches this service through the Gateway,
     # at http://localhost:3000/session.
     environment:
@@ -121,9 +149,15 @@ services:
       # Lab 2, grade 10: sent as Authorization: Bearer on every outgoing call, so the
       # Gateway lets this service's own requests through.
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
+      # Lab 3: register with Service Discovery; circuit breaker on the five dependencies.
+      SERVICE_DISCOVERY_URL: http://service-discovery:3010
+      SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
+      BREAKER_MODE: ${BREAKER_MODE:-log}
     depends_on:
       session-db:
         condition: service_healthy
+      service-discovery:
+        condition: service_started
 
   session-db:
     image: postgres:16-alpine
@@ -143,8 +177,11 @@ services:
 
   # ==================== Applicant Service (Ciprian) ====================
   applicant-service:
-    image: ciprik13/applicant-service:2.0.0
+    image: ciprik13/applicant-service:3.0.0-rc.1
     restart: unless-stopped
+    # Lab 3, grade 5: two instances, sharing applicant-db (STORE_DRIVER mongo).
+    deploy:
+      replicas: ${APPLICANT_REPLICAS:-2}
     # Not published: every REST call reaches this service through the Gateway,
     # at http://localhost:3000/applicant.
     environment:
@@ -170,9 +207,15 @@ services:
       # Gateway lets this service's own requests through.
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
       ENABLE_TEST_HOOKS: ${ENABLE_TEST_HOOKS:-false}
+      # Lab 3: register with Service Discovery; circuit breaker on University Record.
+      SERVICE_DISCOVERY_URL: http://service-discovery:3010
+      SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
+      BREAKER_MODE: ${BREAKER_MODE:-log}
     depends_on:
       applicant-db:
         condition: service_healthy
+      service-discovery:
+        condition: service_started
 
   applicant-db:
     image: mongo:7
@@ -192,8 +235,11 @@ services:
 
   # ==================== Credential Service (Ciprian) ====================
   credential-service:
-    image: ciprik13/credential-service:2.0.0
+    image: ciprik13/credential-service:3.0.0-rc.1
     restart: unless-stopped
+    # Lab 3, grade 5: two instances, sharing credential-db (STORE_DRIVER mongo).
+    deploy:
+      replicas: ${CREDENTIAL_REPLICAS:-2}
     # Not published: every REST call reaches this service through the Gateway,
     # at http://localhost:3000/credential.
     environment:
@@ -221,9 +267,15 @@ services:
       # Gateway lets this service's own requests through.
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
       ENABLE_TEST_HOOKS: ${ENABLE_TEST_HOOKS:-false}
+      # Lab 3: register with Service Discovery; circuit breaker on Applicant.
+      SERVICE_DISCOVERY_URL: http://service-discovery:3010
+      SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
+      BREAKER_MODE: ${BREAKER_MODE:-log}
     depends_on:
       credential-db:
         condition: service_healthy
+      service-discovery:
+        condition: service_started
 
   credential-db:
     image: mongo:7
