@@ -33,3 +33,17 @@ test('LOAD_CRITICAL_PERCENT takes an integer from 1 to 100 and falls back to 80'
     assert.equal(criticalPercentFromEnv(value), 80, String(value));
   }
 });
+
+test('a set but invalid LOAD_CRITICAL_PERCENT is logged at WARN, an unset one is not', () => {
+  const warned = [];
+  const log = { warn: (fields, message) => warned.push({ fields, message }) };
+
+  assert.equal(criticalPercentFromEnv('8O', log), 80);
+  assert.equal(criticalPercentFromEnv(undefined, log), 80);
+  assert.equal(criticalPercentFromEnv('', log), 80);
+  assert.equal(criticalPercentFromEnv('60', log), 60);
+
+  assert.equal(warned.length, 1);
+  assert.deepEqual(warned[0].fields, { loadCriticalPercent: '8O' });
+  assert.equal(warned[0].message, 'invalid LOAD_CRITICAL_PERCENT, using 80');
+});

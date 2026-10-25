@@ -8,10 +8,18 @@
 
 const DEFAULT_CRITICAL_PERCENT = 80;
 
-/** LOAD_CRITICAL_PERCENT, an integer from 1 to 100; anything else falls back to 80. */
-function criticalPercentFromEnv(value = process.env.LOAD_CRITICAL_PERCENT) {
+/**
+ * LOAD_CRITICAL_PERCENT, an integer from 1 to 100; anything else falls back to 80.
+ * A value that is set but invalid (`8O`, or `0.8` meant as a fraction) is logged at
+ * WARN through `log` when one is given, so a typo does not go unnoticed.
+ */
+function criticalPercentFromEnv(value = process.env.LOAD_CRITICAL_PERCENT, log) {
   const percent = Number(value);
-  return Number.isInteger(percent) && percent >= 1 && percent <= 100 ? percent : DEFAULT_CRITICAL_PERCENT;
+  if (Number.isInteger(percent) && percent >= 1 && percent <= 100) return percent;
+  if (log && value !== undefined && value !== '') {
+    log.warn({ loadCriticalPercent: value }, `invalid LOAD_CRITICAL_PERCENT, using ${DEFAULT_CRITICAL_PERCENT}`);
+  }
+  return DEFAULT_CRITICAL_PERCENT;
 }
 
 /**
