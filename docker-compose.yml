@@ -56,7 +56,7 @@ services:
   # Internal registry; no host port is published. This image defines its own
   # Docker health check on /health.
   service-discovery:
-    image: ciprik13/service-discovery:3.0.0-rc.5
+    image: ciprik13/service-discovery:3.0.0-rc.6
     restart: unless-stopped
     environment:
       PORT: 3010
@@ -247,8 +247,8 @@ services:
       STORE_DRIVER: mongo
       CREDENTIAL_SIGNING_SECRET: ${CREDENTIAL_SIGNING_SECRET}
       # Through the Gateway, like every service-to-service call (Lab 2, grade 6).
-      # Unset would mean the client answers from its mock even though the real
-      # service is running here.
+      # Unset would mean every request that needs Applicant Service answers
+      # 503 DEPENDENCY_UNAVAILABLE even though the real service is running here.
       APPLICANT_SERVICE_URL: http://gateway:3000/applicant
       DB_HOST: credential-db
       DB_PORT: 27017
