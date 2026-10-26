@@ -68,7 +68,7 @@ services:
 
   # ==================== Player Service (Mihaela) ====================
   player-service:
-    image: mihaela5/player-service:3.0.0-rc.1
+    image: mihaela5/player-service:3.0.0-rc.2
     restart: unless-stopped
     # Lab 3, grade 5: two instances. Each registers its own container hostname with
     # Service Discovery, so there is no fixed host port and no container_name.
@@ -88,6 +88,9 @@ services:
       # 4500 Session waits for it.
       TASK_TIMEOUT_MS: ${PLAYER_TASK_TIMEOUT_MS:-2000}
       MAX_CONCURRENT_TASKS: ${PLAYER_MAX_CONCURRENT_TASKS:-50}
+      # Lab 3, grade 8: the share of MAX_CONCURRENT_TASKS at which /status reports
+      # load.critical, which Service Discovery alerts on (same rule as Moderation).
+      LOAD_CRITICAL_PERCENT: ${PLAYER_LOAD_CRITICAL_PERCENT:-80}
       # Lab 2, grade 10: signs the login token (JWT, HS256). Required, at least 32
       # characters; the service does not start without it.
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env, see .env.example}
@@ -122,7 +125,7 @@ services:
 
   # ==================== Server Moderation Session Service (Mihaela) ====================
   session-service:
-    image: mihaela5/session-service:3.0.0-rc.1
+    image: mihaela5/session-service:3.0.0-rc.2
     restart: unless-stopped
     # Lab 3, grade 5: two instances; sessions live in session-db, so any instance can
     # serve any session.
@@ -149,6 +152,9 @@ services:
       HTTP_TIMEOUT_MS: ${SESSION_HTTP_TIMEOUT_MS:-4500}
       TASK_TIMEOUT_MS: ${SESSION_TASK_TIMEOUT_MS:-8000}
       MAX_CONCURRENT_TASKS: ${SESSION_MAX_CONCURRENT_TASKS:-50}
+      # Lab 3, grade 8: the share of MAX_CONCURRENT_TASKS at which /status reports
+      # load.critical, which Service Discovery alerts on (same rule as Moderation).
+      LOAD_CRITICAL_PERCENT: ${SESSION_LOAD_CRITICAL_PERCENT:-80}
       # Lab 2, grade 10: sent as Authorization: Bearer on every outgoing call, so the
       # Gateway lets this service's own requests through.
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
