@@ -56,7 +56,7 @@ services:
   # Internal registry; no host port is published. This image defines its own
   # Docker health check on /health.
   service-discovery:
-    image: ciprik13/service-discovery:3.0.0-rc.7
+    image: ciprik13/service-discovery:3.0.0-rc.8
     restart: unless-stopped
     environment:
       PORT: 3010
