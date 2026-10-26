@@ -202,7 +202,7 @@ The single entry point of the system (Lab 2). Clients call `http://localhost:300
 
 | Method | Path | Request | Response |
 |---|---|---|---|
-| GET | /status | — | `{service: "gateway", status: string, time: string}` |
+| GET | /status | — | `{service: "gateway", status: string, time: string, load: load}` |
 | POST | /ws/negotiate | `{sessionId: string, channel: string, playerId?: string}` | `{url: string, ticket: string, expiresAt: string}` |
 | any | /{prefix}/{service path} | forwarded unchanged | the service's response, unchanged |
 
@@ -316,7 +316,7 @@ Notes for callers:
   | `removed` | a caller's circuit breaker reported it (`report`) | only with `includeUnhealthy=true` |
 
   A new instance starts `healthy`. An `unhealthy` instance is still polled and is `healthy` again after `HEALTH_SUCCESSES_TO_READMIT` (default `3`) successful polls in a row. A `removed` instance is readmitted the same way, but only after it has spent at least `REMOVED_MIN_MS` (default `30000`) in `removed`: `/status` only shows that the instance and its database answer, not that its real endpoints work, so without that minimum an instance whose endpoints keep failing would come back within seconds, trip the breakers again and send two alerts per round. A restarted container rejoins without any manual step. An instance with no successful poll and no heartbeat for `EVICT_AFTER_MS` (default `60000`) is deleted from the registry, which cleans up containers that were killed without deregistering.
-- **Critical load.** Service Discovery reads exactly one field from the poll response: `load.critical` (boolean). The service decides when its own load is critical, so Service Discovery needs no per-service thresholds; the rest of `load` is defined with the `/status` load field and stored as-is. A critical instance stays `healthy` and keeps receiving traffic; Service Discovery logs an alert and notifies the developers. Alerts are sent on state changes only (`load.critical` false → true and back, `healthy` → `unhealthy` / `removed` and back), not on every poll.
+- **Load reporting (Lab 3, grade 8).** Every task-controlled service that registers with Service Discovery reports the same `load` object in its `/status` response: `{inFlight: int, maxConcurrent: int, percent: int, critical: boolean}`. `inFlight` is the number of requests currently counted by the service's task-control middleware; `maxConcurrent` is `MAX_CONCURRENT_TASKS`; `percent` is the rounded integer percentage of capacity in use. `critical` is computed from the exact ratio, not the rounded percentage: `inFlight * 100 >= LOAD_CRITICAL_PERCENT * maxConcurrent`. `LOAD_CRITICAL_PERCENT` defaults to `80`; valid values are integers from `1` to `100`, and invalid values fall back to `80`. Service Discovery reads `load.critical` and stores the `load` object as-is. A critical instance remains `healthy` and keeps receiving traffic. Alerts are sent on changes only (`load.critical` false → true and back, `healthy` → `unhealthy` / `removed` and back), not on every poll.
 - **Reporting (Lab 3, grade 10).** A caller whose circuit breaker trips for an instance sends `report` with its own `serviceName` as `reporter` and a short `reason` (e.g. `"3 failures within the breaker window"`; the window itself is defined by the circuit breaker contract). The caller knows which instance failed from the `X-Instance-Id` header the Gateway adds to every forwarded response and to its own `502 BAD_GATEWAY` and `504 GATEWAY_TIMEOUT` (see Gateway); a response without that header (e.g. the Gateway's own `401` or `503`) counts against no instance. `report` moves the instance to `removed` at once, so it stops being returned to the Gateway, and resets its count of successful polls. Reporting an instance that is already `removed` answers `202` with no state change and no second alert, since the Gateway and the caller may both report the same instance.
 - **Choosing an instance** is the Gateway's job (round-robin over the healthy list). Services keep calling each other through the Gateway exactly as in Lab 2; they use Service Discovery only to register, heartbeat, deregister and report.
 - **Errors** use the shared envelope `{error: {code: string, message: string}}`: `401 UNAUTHORIZED`, `404 NOT_FOUND` (unknown instance on a write), `422 VALIDATION_FAILED` (missing or empty field, `url` not `http://` or `https://`, `statusPath` not starting with `/`), `500 INTERNAL_ERROR`. An unknown `serviceName` on `GET /services/{name}/instances` is not an error: it answers `200` with an empty `instances` list, since a service with no running instances is a normal state.
@@ -329,7 +329,7 @@ Notes for callers:
 | GET | /players/{id} | — | `{playerId: string, username: string, level: int, xp: int, friends: string[]}` |
 | PATCH | /players/{id}/xp | `{xpGained: int, reason: string}` | `{playerId: string, xp: int, level: int}` |
 | DELETE | /players/{id} | — | `{playerId: string, deleted: boolean}` |
-| GET | /status | — | `{status: string, database: string}` — `503` with `status: "degraded"` and `database: "down"` when PostgreSQL is unreachable |
+| GET | /status | — | `{status: string, database: string, load: load}` — `503` with `status: "degraded"` and `database: "down"` when PostgreSQL is unreachable |
 
 
 >Notes for callers:
@@ -351,7 +351,7 @@ Notes for callers:
 | GET | /sessions/{id} | — | `{sessionId: string, currentApplicantId: string, processedCount: int, score: int, status: string}` |
 | POST | /sessions/{id}/end | — | `{sessionId: string, result: string, score: int}` |
 | POST | /sessions/{id}/process-applicant | — | `{sessionId: string, processedCount: int, currentApplicantId: string, applicant: object, credentialCheck: object, rulesCheck: object, universityRecords: object, sources: {applicant, credentialCheck, rulesCheck, universityRecords: "live" \| "mock"}}` — `502 DEPENDENCY_REFUSED` when a dependency refuses the request, `503 DEPENDENCY_UNAVAILABLE` when one is unavailable |
-| GET | /status | — | `{status: string, database: string}` — `503` with `status: "degraded"` and `database: "down"` when PostgreSQL is unreachable |
+| GET | /status | — | `{status: string, database: string, load: load}` — `503` with `status: "degraded"` and `database: "down"` when PostgreSQL is unreachable |
 | DELETE | /sessions/{id} | — | `{sessionId: string, deleted: boolean}` — `404 NOT_FOUND` if unknown |
 
 Notes for callers:
@@ -376,7 +376,7 @@ Notes for callers:
 | POST | /applicants/generate | — | `{applicantId: string, name: string, studentId: string, major: string, year: int\|null, role: string, status: string}` |
 | GET | /applicants/{id} | — | `{applicantId: string, name: string, studentId: string, major: string, year: int\|null, role: string, status: string}` |
 | GET | /health | — | `{status: "ok"}` |
-| GET | /status | — | `{service: string, status: string, database: string, time: string}` — `503` with `status: "degraded"` and `database: "down"` when MongoDB is unreachable |
+| GET | /status | — | `{service: string, status: string, database: string, time: string, load: load}` — `503` with `status: "degraded"` and `database: "down"` when MongoDB is unreachable |
 | POST | /applicants | `{name: string, studentId: string, major: string, year: int\|null, role: string, status: string}` | `201` + `{applicantId: string, name: string, studentId: string, major: string, year: int\|null, role: string, status: string}` |
 | GET | /applicants | `?role=string&limit=int&cursor=string` (limit 1-100, default 20) | `{items: [applicant], nextCursor: string\|null}` |
 | PATCH | /applicants/{id} | any subset of `{name, major, year, role, status}` | the full applicant shape |
@@ -388,7 +388,7 @@ Notes for callers:
 | GET | /credentials/{applicantId} | — | `{applicantId: string, studentIdCard: string, universityEmail: string, valid: boolean, issues: string[]}` |
 | POST | /credentials/{applicantId}/validate | — | `{applicantId: string, valid: boolean, issues: string[]}` |
 | GET | /health | — | `{status: "ok"}` |
-| GET | /status | — | `{service: string, status: string, database: string, time: string}` — `503` with `status: "degraded"` and `database: "down"` when MongoDB is unreachable |
+| GET | /status | — | `{service: string, status: string, database: string, time: string, load: load}` — `503` with `status: "degraded"` and `database: "down"` when MongoDB is unreachable |
 | POST | /credentials/{applicantId} | `{core?: {name, studentId, major, year, role, status}, scenario?: string, seed?: int}` | `201` + `{applicantId: string, studentIdCard: string, universityEmail: string, valid: boolean, issues: string[]}` |
 | GET | /credentials | `?limit=int&cursor=string` (limit 1-100, default 20) | `{items: [credential], nextCursor: string\|null}` |
 | PATCH | /credentials/{applicantId} | any subset of `{holderName, expiresAt, documents}` | the credential shape |
@@ -419,6 +419,7 @@ Notes for callers (Applicant Service, Credential Service):
 | ------ | ----------------- | ----------------------------- | --------------------------- |
 | `GET`  | `/rules/current`  | —                             | `{ rules: [...] }`          |
 | `POST` | `/rules/evaluate` | `{ applicantId, applicant? }` | `{ passed, violatedRules }` |
+| `GET` | `/status` | — | `200` + `{status: "ok", service: "server-rules-service", database: "up", load: load}`; `503` + `{status: "degraded", service: "server-rules-service", database: "down", load: load}` when MongoDB is unreachable |
 
 **##### Evaluate rules**
 
@@ -475,6 +476,7 @@ The Server Rules Service does not make the final admission decision; it only rep
 | `POST`   | `/records`               | University record JSON               | Created record              |
 | `PUT`    | `/records/{applicantId}` | Updated fields                       | Updated record              |
 | `DELETE` | `/records/{applicantId}` | —                                    | Deleted record              |
+| `GET` | `/status` | — | `200` + `{status: "ok", database: "up", load: load}`; `503` + `{status: "error", database: "down", load: load}` when PostgreSQL is unreachable |
 
 For a specific applicant, `requestingPlayerId` **must be supplied as a query parameter**:
 
@@ -522,7 +524,7 @@ The service uses PostgreSQL with a persistent Docker volume.
 #### Moderation Service
 | Method | Path | Request | Response |
 |---|---|---|---|
-| GET | /status | — | `{service: string, status: string, database: string, time: string}` |
+| GET | /status | — | `{service: string, status: string, database: string, time: string, load: load}` |
 | POST | /moderation/decide | `{sessionId: string, applicantId: string, decision: string, decidedBy?: string}` | `201` + `{decisionId: string, sessionId: string, applicantId: string, decision: string, expectedDecision: string, correct: boolean, violatedRules: string[], penalty: int, decidedBy?: string, sources: object, createdAt: string, updatedAt?: string}` plus `announcedInChat: boolean` |
 | GET | /moderation/{decisionId} | — | the decision shape |
 | PATCH | /moderation/{decisionId} | `{decision: string, decidedBy?: string}` | the decision shape, plus `announcedInChat: boolean` |
@@ -548,7 +550,7 @@ Notes for callers:
 #### Discord DMs Service
 | Method | Path | Request | Response |
 |---|---|---|---|
-| GET | /status | — | `{service: string, status: string, database: string, time: string}` |
+| GET | /status | — | `{service: string, status: string, database: string, time: string, load: load}` |
 | POST | /sessions/<wbr>{id}/<wbr>bootstrap | — | `201` + `{sessionId: string, created: string[], existing: string[], channels: string[]}` |
 | POST | /sessions/<wbr>{id}/<wbr>channels | `{name: string}` | `201` + `{id: string, sessionId: string, name: string, createdAt: string}` |
 | GET | /sessions/<wbr>{id}/<wbr>channels | `?playerId=string` (optional) | `{sessionId: string, playerId: string, channels: string[]}` |
