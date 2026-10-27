@@ -490,7 +490,20 @@ if (( ALERT_COUNT < 2 )); then
   die "Expected at least two health-alert log entries for the target; found $ALERT_COUNT."
 fi
 
+if ! grep -E '"alert"[[:space:]]*:[[:space:]]*"removed"' \
+  "$TMP_DIR/target-alerts.log" |
+  grep -E '"reporter"[[:space:]]*:[[:space:]]*"server-rules-service"' \
+    > /dev/null; then
+  cat "$TMP_DIR/target-alerts.log"
+  die "Expected a 'removed' health alert for the target reported by server-rules-service."
+fi
+
+if ! grep -E '"alert"[[:space:]]*:[[:space:]]*"recovered"' \
+  "$TMP_DIR/target-alerts.log" > /dev/null; then
+  cat "$TMP_DIR/target-alerts.log"
+  die "Expected a 'recovered' health alert for the target."
+fi
+
 cat "$TMP_DIR/target-alerts.log"
 
-echo
-echo "PASS: Circuit-breaker failure and recovery test completed."
+echo "PASS: Confirmed removal by server-rules-service and subsequent recovery."
