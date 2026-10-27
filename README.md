@@ -450,10 +450,12 @@ times out after `2500` ms and carries `Authorization: Bearer <SERVICE_TOKEN>` wh
 - `200`: the record is used.
 - `404 NOT_FOUND`: no university record; rules that need it are reported as unevaluable.
 - `502 BAD_GATEWAY`, `504 GATEWAY_TIMEOUT`, any other `5xx`, a timeout or a network
-  error: the built-in mock record is used.
+  error: no mock record is used; `POST /rules/evaluate` answers
+  `503 DEPENDENCY_UNAVAILABLE`.
 - `502 DEPENDENCY_REFUSED` and refusals (`404 ROUTE_NOT_FOUND`, `401`, `403`, `422`):
-  no mock; `POST /rules/evaluate` answers `502 DEPENDENCY_REFUSED`.
-- `UNIVERSITY_RECORD_SERVICE_URL` unset: the mock record is used.
+  no mock record is used; `POST /rules/evaluate` answers `502 DEPENDENCY_REFUSED`.
+- `UNIVERSITY_RECORD_SERVICE_URL` unset: no mock record is used; requests that need
+  University Record answer `503 DEPENDENCY_UNAVAILABLE`.
 
 The current Lab 1 rule set includes:
 
