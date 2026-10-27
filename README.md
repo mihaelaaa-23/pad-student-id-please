@@ -449,10 +449,13 @@ times out after `2500` ms and carries `Authorization: Bearer <SERVICE_TOKEN>` wh
 - `200`: the record is used.
 - `404 NOT_FOUND`: no university record; rules that need it are reported as unevaluable.
 - `502 BAD_GATEWAY`, `504 GATEWAY_TIMEOUT`, any other `5xx`, a timeout or a network
-  error: the built-in mock record is used.
+  error: `POST /rules/evaluate` answers `503 DEPENDENCY_UNAVAILABLE`. An open
+  circuit breaker also answers `503 DEPENDENCY_UNAVAILABLE`, with `Retry-After`
+  while it is open.
 - `502 DEPENDENCY_REFUSED` and refusals (`404 ROUTE_NOT_FOUND`, `401`, `403`, `422`):
-  no mock; `POST /rules/evaluate` answers `502 DEPENDENCY_REFUSED`.
-- `UNIVERSITY_RECORD_SERVICE_URL` unset: the mock record is used.
+  `POST /rules/evaluate` answers `502 DEPENDENCY_REFUSED`.
+- `UNIVERSITY_RECORD_SERVICE_URL` unset: requests that need University Record answer
+  `503 DEPENDENCY_UNAVAILABLE`.
 
 The current Lab 1 rule set includes:
 
@@ -591,8 +594,6 @@ Notes for callers:
 ### Circuit Breaker
 
 Every service that calls another service wraps those calls in a circuit breaker (Lab 3, grades 7 and 10). These rules are shared: the Node services copy one reference implementation, Discord DMs and Moderation implement the same behaviour in Go, and the Gateway applies it to its upstreams. No call to Service Discovery is wrapped: not `register`, `heartbeat`, `DELETE` or `report` from the services, and not Service Discovery's own health polls. Moderation's verdict announcement to Discord DMs is not wrapped either: it is best-effort (see the timeout budget), so its failures are logged at `WARN` and never counted.
-
-This section replaces the mock fallbacks still described in the service sections and in the Gateway notes above; each owner removes them from their section with the change that removes the mock from their service.
 
 **Threshold.** A breaker trips after **3 failures within a window of `HTTP_TIMEOUT_MS × 3.5`**, counted over a sliding window. A failure is timestamped when the caller observes it (for a timeout, when the timeout fires), and successes in between do not clear the window; only time does. The window comes from `HTTP_TIMEOUT_MS` because that is the limit of the call the breaker wraps and the caller knows it, while it does not know the callee's `TASK_TIMEOUT_MS`. Windows in the shared stack:
 
