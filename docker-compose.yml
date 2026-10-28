@@ -3,7 +3,7 @@ services:
   # The single entry point. It waits only for Service Discovery: it reads the instance
   # list from it at startup and answers 502 BAD_GATEWAY for a service until it is up.
   gateway:
-    image: mihaela5/gateway:3.0.0-rc.3
+    image: mihaela5/gateway:3.0.0
     restart: unless-stopped
     ports:
       - "3000:3000"
@@ -56,7 +56,7 @@ services:
   # Internal registry; no host port is published. This image defines its own
   # Docker health check on /health.
   service-discovery:
-    image: ciprik13/service-discovery:3.0.0-rc.8
+    image: ciprik13/service-discovery:3.0.0
     restart: unless-stopped
     environment:
       PORT: 3010
@@ -68,7 +68,7 @@ services:
 
   # ==================== Player Service (Mihaela) ====================
   player-service:
-    image: mihaela5/player-service:3.0.0-rc.2
+    image: mihaela5/player-service:3.0.0
     restart: unless-stopped
     # Lab 3, grade 5: two instances. Each registers its own container hostname with
     # Service Discovery, so there is no fixed host port and no container_name.
@@ -125,7 +125,7 @@ services:
 
   # ==================== Server Moderation Session Service (Mihaela) ====================
   session-service:
-    image: mihaela5/session-service:3.0.0-rc.3
+    image: mihaela5/session-service:3.0.0
     restart: unless-stopped
     # Lab 3, grade 5: two instances; sessions live in session-db, so any instance can
     # serve any session.
@@ -186,7 +186,7 @@ services:
 
   # ==================== Applicant Service (Ciprian) ====================
   applicant-service:
-    image: ciprik13/applicant-service:3.0.0-rc.2
+    image: ciprik13/applicant-service:3.0.0
     restart: unless-stopped
     # Lab 3, grade 5: two instances, sharing applicant-db (STORE_DRIVER mongo).
     deploy:
@@ -247,7 +247,7 @@ services:
 
   # ==================== Credential Service (Ciprian) ====================
   credential-service:
-    image: ciprik13/credential-service:3.0.0-rc.2
+    image: ciprik13/credential-service:3.0.0
     restart: unless-stopped
     # Lab 3, grade 5: two instances, sharing credential-db (STORE_DRIVER mongo).
     deploy:
@@ -310,7 +310,7 @@ services:
 
   # ==================== Server Rules Service (Ion) ====================
   server-rules-service:
-    image: ion190/server-rules-service:3.0.0-rc.1
+    image: ion190/server-rules-service:3.0.0
     restart: unless-stopped
     deploy:
       replicas: ${RULES_REPLICAS:-2}
@@ -354,7 +354,7 @@ services:
 
   # ==================== University Record Service (Ion) ====================
   university-record-service:
-    image: ion190/university-record-service:3.0.0-rc.1
+    image: ion190/university-record-service:3.0.0
     restart: unless-stopped
     deploy:
       replicas: ${UNIVERSITY_RECORD_REPLICAS:-2}
@@ -395,7 +395,7 @@ services:
 
   # ==================== Moderation Service (Liviu) ====================
   moderation-service:
-    image: d3adeye/moderation-service:3.0.0-rc.1
+    image: d3adeye/moderation-service:3.0.0
     restart: unless-stopped
     # Lab 3, grade 5: two instances. Each registers its own container hostname with
     # Service Discovery, so there is no fixed host port and no container_name. The
@@ -458,7 +458,7 @@ services:
 
   # ==================== Discord DMs Service (Liviu) ====================
   discord-dms-service:
-    image: d3adeye/discord-dms-service:3.0.0-rc.1
+    image: d3adeye/discord-dms-service:3.0.0
     restart: unless-stopped
     # One instance on purpose (Lab 3, grade 5): 3008 is published to the host, and a
     # message sent to one replica would not reach sockets connected to another.
