@@ -35,3 +35,7 @@
 	path = services/gateway
 	url = https://github.com/mihaelaaa-23/gateway.git
 	branch = dev
+[submodule "services/service-discovery"]
+	path = services/service-discovery
+	url = https://github.com/ciprik13/service-discovery.git
+	branch = dev
