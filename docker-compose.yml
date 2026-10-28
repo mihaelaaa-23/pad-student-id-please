@@ -1,14 +1,22 @@
 services:
   # ==================== Gateway (Mihaela) ====================
-  # The single entry point. No depends_on: the Gateway starts independently and
-  # answers 502 BAD_GATEWAY until a service is up.
+  # The single entry point. It waits only for Service Discovery: it reads the instance
+  # list from it at startup and answers 502 BAD_GATEWAY for a service until it is up.
   gateway:
-    image: mihaela5/gateway:2.0.0
+    image: mihaela5/gateway:3.0.0
     restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
       PORT: 3000
+      # Lab 3, grades 5 and 6: requests go to the healthy instances Service Discovery
+      # lists, in turn. The fixed URLs below stay for a service that does not register
+      # yet (README, Gateway notes, "Routing to instances").
+      SERVICE_DISCOVERY_URL: http://service-discovery:3010
+      SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
+      # Lab 3, grades 7 and 10: remove reports a tripped instance to Service Discovery,
+      # which takes it out of rotation; log only logs it.
+      BREAKER_MODE: ${BREAKER_MODE:-remove}
       PLAYER_SERVICE_URL: http://player-service:3001
       SESSION_SERVICE_URL: http://session-service:3002
       APPLICANT_SERVICE_URL: http://applicant-service:3003
@@ -37,11 +45,35 @@ services:
       # The address the *client* connects to. The in-network name above means
       # nothing outside this network, and this URL is handed to the client.
       DISCORD_DMS_WS_PUBLIC_URL: ws://localhost:3008
+    # service_started, not service_healthy: with no list from Service Discovery the Gateway
+    # routes to the fixed upstreams above, so Service Discovery failing to start does not
+    # take down the only entry point.
+    depends_on:
+      service-discovery:
+        condition: service_started
+
+  # ==================== Service Discovery (Ciprian) ====================
+  # Internal registry; no host port is published. This image defines its own
+  # Docker health check on /health.
+  service-discovery:
+    image: ciprik13/service-discovery:3.0.0
+    restart: unless-stopped
+    environment:
+      PORT: 3010
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
+      LOG_LEVEL: ${SERVICE_DISCOVERY_LOG_LEVEL:-INFO}
+      # Lab 3, grade 9: health alerts are also posted to this Discord webhook. Empty
+      # means they are only logged. A credential: set it in .env, never here.
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
 
   # ==================== Player Service (Mihaela) ====================
   player-service:
-    image: mihaela5/player-service:2.0.0
+    image: mihaela5/player-service:3.0.0
     restart: unless-stopped
+    # Lab 3, grade 5: two instances. Each registers its own container hostname with
+    # Service Discovery, so there is no fixed host port and no container_name.
+    deploy:
+      replicas: ${PLAYER_REPLICAS:-2}
     # Not published: every REST call reaches this service through the Gateway,
     # at http://localhost:3000/player.
     environment:
@@ -56,15 +88,24 @@ services:
       # 4500 Session waits for it.
       TASK_TIMEOUT_MS: ${PLAYER_TASK_TIMEOUT_MS:-2000}
       MAX_CONCURRENT_TASKS: ${PLAYER_MAX_CONCURRENT_TASKS:-50}
+      # Lab 3, grade 8: the share of MAX_CONCURRENT_TASKS at which /status reports
+      # load.critical, which Service Discovery alerts on (same rule as Moderation).
+      LOAD_CRITICAL_PERCENT: ${PLAYER_LOAD_CRITICAL_PERCENT:-80}
       # Lab 2, grade 10: signs the login token (JWT, HS256). Required, at least 32
       # characters; the service does not start without it.
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env, see .env.example}
       # The Gateway's authorization is on, so a protected route called without its
       # caller headers did not come through the Gateway: refuse it (401).
       REQUIRE_CALLER_HEADERS: "true"
+      # Lab 3: register on startup, heartbeat, deregister on shutdown.
+      SERVICE_DISCOVERY_URL: http://service-discovery:3010
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
+      SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
     depends_on:
       player-db:
         condition: service_healthy
+      service-discovery:
+        condition: service_started
 
   player-db:
     image: postgres:16-alpine
@@ -84,8 +125,12 @@ services:
 
   # ==================== Server Moderation Session Service (Mihaela) ====================
   session-service:
-    image: mihaela5/session-service:2.0.0
+    image: mihaela5/session-service:3.0.0
     restart: unless-stopped
+    # Lab 3, grade 5: two instances; sessions live in session-db, so any instance can
+    # serve any session.
+    deploy:
+      replicas: ${SESSION_REPLICAS:-2}
     # Not published: every REST call reaches this service through the Gateway,
     # at http://localhost:3000/session.
     environment:
@@ -107,12 +152,21 @@ services:
       HTTP_TIMEOUT_MS: ${SESSION_HTTP_TIMEOUT_MS:-4500}
       TASK_TIMEOUT_MS: ${SESSION_TASK_TIMEOUT_MS:-8000}
       MAX_CONCURRENT_TASKS: ${SESSION_MAX_CONCURRENT_TASKS:-50}
+      # Lab 3, grade 8: the share of MAX_CONCURRENT_TASKS at which /status reports
+      # load.critical, which Service Discovery alerts on (same rule as Moderation).
+      LOAD_CRITICAL_PERCENT: ${SESSION_LOAD_CRITICAL_PERCENT:-80}
       # Lab 2, grade 10: sent as Authorization: Bearer on every outgoing call, so the
       # Gateway lets this service's own requests through.
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
+      # Lab 3: register with Service Discovery; circuit breaker on the five dependencies.
+      SERVICE_DISCOVERY_URL: http://service-discovery:3010
+      SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
+      BREAKER_MODE: ${BREAKER_MODE:-remove}
     depends_on:
       session-db:
         condition: service_healthy
+      service-discovery:
+        condition: service_started
 
   session-db:
     image: postgres:16-alpine
@@ -132,8 +186,11 @@ services:
 
   # ==================== Applicant Service (Ciprian) ====================
   applicant-service:
-    image: ciprik13/applicant-service:2.0.0
+    image: ciprik13/applicant-service:3.0.0
     restart: unless-stopped
+    # Lab 3, grade 5: two instances, sharing applicant-db (STORE_DRIVER mongo).
+    deploy:
+      replicas: ${APPLICANT_REPLICAS:-2}
     # Not published: every REST call reaches this service through the Gateway,
     # at http://localhost:3000/applicant.
     environment:
@@ -155,13 +212,22 @@ services:
       HTTP_TIMEOUT_MS: ${APPLICANT_HTTP_TIMEOUT_MS:-2500}
       TASK_TIMEOUT_MS: ${APPLICANT_TASK_TIMEOUT_MS:-3000}
       MAX_CONCURRENT_TASKS: ${APPLICANT_MAX_CONCURRENT_TASKS:-50}
+      # Lab 3, grade 8: the share of MAX_CONCURRENT_TASKS at which /status reports
+      # load.critical, which Service Discovery alerts on (same rule as Moderation).
+      LOAD_CRITICAL_PERCENT: ${APPLICANT_LOAD_CRITICAL_PERCENT:-80}
       # Lab 2, grade 10: sent as Authorization: Bearer on every outgoing call, so the
       # Gateway lets this service's own requests through.
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
       ENABLE_TEST_HOOKS: ${ENABLE_TEST_HOOKS:-false}
+      # Lab 3: register with Service Discovery; circuit breaker on University Record.
+      SERVICE_DISCOVERY_URL: http://service-discovery:3010
+      SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
+      BREAKER_MODE: ${BREAKER_MODE:-remove}
     depends_on:
       applicant-db:
         condition: service_healthy
+      service-discovery:
+        condition: service_started
 
   applicant-db:
     image: mongo:7
@@ -181,8 +247,11 @@ services:
 
   # ==================== Credential Service (Ciprian) ====================
   credential-service:
-    image: ciprik13/credential-service:2.0.0
+    image: ciprik13/credential-service:3.0.0
     restart: unless-stopped
+    # Lab 3, grade 5: two instances, sharing credential-db (STORE_DRIVER mongo).
+    deploy:
+      replicas: ${CREDENTIAL_REPLICAS:-2}
     # Not published: every REST call reaches this service through the Gateway,
     # at http://localhost:3000/credential.
     environment:
@@ -190,8 +259,8 @@ services:
       STORE_DRIVER: mongo
       CREDENTIAL_SIGNING_SECRET: ${CREDENTIAL_SIGNING_SECRET}
       # Through the Gateway, like every service-to-service call (Lab 2, grade 6).
-      # Unset would mean the client answers from its mock even though the real
-      # service is running here.
+      # Unset would mean every request that needs Applicant Service answers
+      # 503 DEPENDENCY_UNAVAILABLE even though the real service is running here.
       APPLICANT_SERVICE_URL: http://gateway:3000/applicant
       DB_HOST: credential-db
       DB_PORT: 27017
@@ -206,13 +275,22 @@ services:
       HTTP_TIMEOUT_MS: ${CREDENTIAL_HTTP_TIMEOUT_MS:-3500}
       TASK_TIMEOUT_MS: ${CREDENTIAL_TASK_TIMEOUT_MS:-4000}
       MAX_CONCURRENT_TASKS: ${CREDENTIAL_MAX_CONCURRENT_TASKS:-50}
+      # Lab 3, grade 8: the share of MAX_CONCURRENT_TASKS at which /status reports
+      # load.critical, which Service Discovery alerts on (same rule as Moderation).
+      LOAD_CRITICAL_PERCENT: ${CREDENTIAL_LOAD_CRITICAL_PERCENT:-80}
       # Lab 2, grade 10: sent as Authorization: Bearer on every outgoing call, so the
       # Gateway lets this service's own requests through.
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
       ENABLE_TEST_HOOKS: ${ENABLE_TEST_HOOKS:-false}
+      # Lab 3: register with Service Discovery; circuit breaker on Applicant.
+      SERVICE_DISCOVERY_URL: http://service-discovery:3010
+      SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
+      BREAKER_MODE: ${BREAKER_MODE:-remove}
     depends_on:
       credential-db:
         condition: service_healthy
+      service-discovery:
+        condition: service_started
 
   credential-db:
     image: mongo:7
@@ -232,8 +310,10 @@ services:
 
   # ==================== Server Rules Service (Ion) ====================
   server-rules-service:
-    image: ion190/server-rules-service:2.0.0
+    image: ion190/server-rules-service:3.0.0
     restart: unless-stopped
+    deploy:
+      replicas: ${RULES_REPLICAS:-2}
     environment:
       PORT: 3005
       DB_HOST: rules-db
@@ -245,9 +325,16 @@ services:
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
       TASK_TIMEOUT_MS: ${RULES_TASK_TIMEOUT_MS:-3000}
       MAX_CONCURRENT_TASKS: ${RULES_MAX_CONCURRENT_TASKS:-50}
+      HTTP_TIMEOUT_MS: ${RULES_HTTP_TIMEOUT_MS:-2500}
+      BREAKER_MODE: ${BREAKER_MODE:-remove}
+      LOAD_CRITICAL_PERCENT: ${RULES_LOAD_CRITICAL_PERCENT:-80}
+      SERVICE_DISCOVERY_URL: http://service-discovery:3010
+      SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
     depends_on:
       rules-db:
         condition: service_healthy
+      service-discovery:
+        condition: service_started
 
   rules-db:
     image: mongo:7
@@ -267,8 +354,10 @@ services:
 
   # ==================== University Record Service (Ion) ====================
   university-record-service:
-    image: ion190/university-record-service:2.0.0
+    image: ion190/university-record-service:3.0.0
     restart: unless-stopped
+    deploy:
+      replicas: ${UNIVERSITY_RECORD_REPLICAS:-2}
     environment:
       PORT: 3006
       DB_HOST: university-record-db
@@ -278,9 +367,15 @@ services:
       DB_NAME: ${UNIVERSITY_RECORD_DB_NAME}
       TASK_TIMEOUT_MS: ${UNIVERSITY_RECORD_TASK_TIMEOUT_MS:-2000}
       MAX_CONCURRENT_TASKS: ${UNIVERSITY_RECORD_MAX_CONCURRENT_TASKS:-50}
+      LOAD_CRITICAL_PERCENT: ${UNIVERSITY_RECORD_LOAD_CRITICAL_PERCENT:-80}
+      SERVICE_DISCOVERY_URL: http://service-discovery:3010
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
+      SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
     depends_on:
       university-record-db:
         condition: service_healthy
+      service-discovery:
+        condition: service_started
 
   university-record-db:
     image: postgres:16-alpine
@@ -300,8 +395,13 @@ services:
 
   # ==================== Moderation Service (Liviu) ====================
   moderation-service:
-    image: d3adeye/moderation-service:2.0.0
+    image: d3adeye/moderation-service:3.0.0
     restart: unless-stopped
+    # Lab 3, grade 5: two instances. Each registers its own container hostname with
+    # Service Discovery, so there is no fixed host port and no container_name. The
+    # audit trail lives in moderation-db, so any instance can serve any decision.
+    deploy:
+      replicas: ${MODERATION_REPLICAS:-2}
     # Not published: every REST call reaches this service through the Gateway,
     # at http://localhost:3000/moderation.
     environment:
@@ -319,6 +419,16 @@ services:
       HTTP_TIMEOUT_MS: ${MODERATION_HTTP_TIMEOUT_MS:-4500}
       TASK_TIMEOUT_MS: ${MODERATION_TASK_TIMEOUT_MS:-8000}
       MAX_CONCURRENT_TASKS: ${MODERATION_MAX_CONCURRENT_TASKS:-50}
+      # Lab 3, grade 8: the share of MAX_CONCURRENT_TASKS at which /status reports
+      # load.critical, which Service Discovery alerts on.
+      LOAD_CRITICAL_PERCENT: ${MODERATION_LOAD_CRITICAL_PERCENT:-80}
+      # Lab 3, grades 4-5: register on startup, heartbeat, deregister on shutdown.
+      SERVICE_DISCOVERY_URL: http://service-discovery:3010
+      SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
+      # Lab 3, grades 7 and 10: log a tripped instance, or also take it out of rotation.
+      BREAKER_MODE: ${BREAKER_MODE:-remove}
+      # Lab 3, grade 3: DEBUG, INFO, WARN or ERROR.
+      LOG_LEVEL: ${MODERATION_LOG_LEVEL:-INFO}
       DB_HOST: moderation-db
       DB_PORT: 5432
       DB_USER: ${MODERATION_DB_USER}
@@ -327,6 +437,8 @@ services:
     depends_on:
       moderation-db:
         condition: service_healthy
+      service-discovery:
+        condition: service_started
 
   moderation-db:
     image: postgres:16-alpine
@@ -346,8 +458,10 @@ services:
 
   # ==================== Discord DMs Service (Liviu) ====================
   discord-dms-service:
-    image: d3adeye/discord-dms-service:2.0.0
+    image: d3adeye/discord-dms-service:3.0.0
     restart: unless-stopped
+    # One instance on purpose (Lab 3, grade 5): 3008 is published to the host, and a
+    # message sent to one replica would not reach sockets connected to another.
     # Only the WebSocket port is published. A client negotiates with the Gateway
     # and then connects to the socket directly, rather than keeping the Gateway
     # busy proxying a long-lived connection. REST lives on 3009, which stays
@@ -369,9 +483,24 @@ services:
       HTTP_TIMEOUT_MS: ${DISCORD_DMS_HTTP_TIMEOUT_MS:-8500}
       TASK_TIMEOUT_MS: ${DISCORD_DMS_TASK_TIMEOUT_MS:-9000}
       MAX_CONCURRENT_TASKS: ${DISCORD_DMS_MAX_CONCURRENT_TASKS:-50}
+      # Lab 3, grade 8: what counts as critical load. REST is a share of
+      # MAX_CONCURRENT_TASKS; sockets sit outside that limit, so they have a ceiling
+      # of their own. Either one makes the instance critical.
+      LOAD_CRITICAL_PERCENT: ${DISCORD_DMS_LOAD_CRITICAL_PERCENT:-80}
+      WS_CRITICAL_CONNECTIONS: ${DISCORD_DMS_WS_CRITICAL_CONNECTIONS:-500}
+      # Lab 3, grades 4-5: register on startup, heartbeat, deregister on shutdown.
+      # The REST port is registered, not the websocket one: that is where /status is.
+      SERVICE_DISCOVERY_URL: http://service-discovery:3010
+      SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
+      # Lab 3, grades 7 and 10: log a tripped instance, or also take it out of rotation.
+      BREAKER_MODE: ${BREAKER_MODE:-remove}
+      # Lab 3, grade 3: DEBUG, INFO, WARN or ERROR.
+      LOG_LEVEL: ${DISCORD_DMS_LOG_LEVEL:-INFO}
     depends_on:
       discord-dms-db:
         condition: service_healthy
+      service-discovery:
+        condition: service_started
 
   discord-dms-db:
     image: mongo:7
