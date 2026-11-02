@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+// Server Rules Service RPCs called by other services (Lab 4, Grade 8).
+// Draft: owner (Server Rules) to confirm the RPC list and fields.
+package server_rules.v1;
+
+import "applicant/v1/applicant.proto";
+
+option go_package = "github.com/mihaelaaa-23/pad-student-id-please/proto/gen/go/server_rules/v1;serverrulesv1";
+
+message EvaluateRulesRequest {
+  string applicant_id = 1;
+  // The full applicant, as Session sends it today with POST /rules/evaluate.
+  applicant.v1.Applicant applicant = 2;
+}
+
+message EvaluateRulesResponse {
+  bool passed = 1;
+  // Rule ids, e.g. "ONLY_FAF_STUDENTS".
+  repeated string violated_rules = 2;
+}
+
+service ServerRulesService {
+  // Session, Moderation. REST: POST /rules/evaluate.
+  rpc EvaluateRules(EvaluateRulesRequest) returns (EvaluateRulesResponse);
+}
