@@ -288,16 +288,17 @@ Service Discovery is internal infrastructure: it listens on `3010` inside the co
 
 | Method | Path | Request | Response |
 |---|---|---|---|
-| POST | /services/register | `{serviceName: string, instanceId: string, url: string, statusPath?: string}` | `201` new, `200` already registered + `{serviceName: string, instanceId: string, url: string, state: string, registeredAt: string}` |
+| POST | /services/register | `{serviceName: string, instanceId: string, url: string, statusPath?: string, grpcUrl?: string, topics?: string[]}` | `201` new, `200` already registered + `{serviceName: string, instanceId: string, url: string, state: string, registeredAt: string}` |
 | PUT | /services/{serviceName}/instances/{instanceId}/heartbeat | — | `200` + `{serviceName: string, instanceId: string, state: string, lastSeen: string}`; `404 NOT_FOUND` if the instance is not registered |
 | DELETE | /services/{serviceName}/instances/{instanceId} | — | `204`; `404 NOT_FOUND` if the instance is not registered |
 | POST | /services/{serviceName}/instances/{instanceId}/report | `{reporter: string, reason: string}` | `202` + `{serviceName: string, instanceId: string, state: string}`; `404 NOT_FOUND` if the instance is not registered |
 | GET | /services/{serviceName}/instances | `?includeUnhealthy=boolean` (default `false`) | `{serviceName: string, instances: [instance]}` |
 | GET | /services | — | `{services: {<serviceName>: [instance]}}` — every instance in every state |
+| GET | /topics | — | `{topics: {<topic>: string[]}}` — the serviceNames subscribed to each topic |
 | GET | /health | — | `{status: "ok"}` |
 | GET | /status | — | `{service: "service-discovery", status: string, time: string, instances: int}` |
 
-`instance` is `{serviceName: string, instanceId: string, url: string, state: string, load: object|null, lastSeen: string|null, registeredAt: string}`.
+`instance` is `{serviceName: string, instanceId: string, url: string, grpcUrl: string|null, topics: string[], state: string, load: object|null, lastSeen: string|null, registeredAt: string}`.
 
 Notes for callers:
 
@@ -318,8 +319,33 @@ Notes for callers:
   A new instance starts `healthy`. An `unhealthy` instance is still polled and is `healthy` again after `HEALTH_SUCCESSES_TO_READMIT` (default `3`) successful polls in a row. A `removed` instance is readmitted the same way, but only after it has spent at least `REMOVED_MIN_MS` (default `30000`) in `removed`: `/status` only shows that the instance and its database answer, not that its real endpoints work, so without that minimum an instance whose endpoints keep failing would come back within seconds, trip the breakers again and send two alerts per round. A restarted container rejoins without any manual step. An instance with no successful poll and no heartbeat for `EVICT_AFTER_MS` (default `60000`) is deleted from the registry, which cleans up containers that were killed without deregistering.
 - **Load reporting (Lab 3, grade 8).** The shared fields reported by task-controlled application services in their `/status` `load` object are `{inFlight: int, maxConcurrent: int, percent: int, critical: boolean}`. `inFlight` is the number of requests currently counted by the service's task-control middleware; `maxConcurrent` is `MAX_CONCURRENT_TASKS`; `percent` is the rounded integer percentage of concurrency capacity in use. For concurrency-based load, `critical` is true when the exact ratio reaches `LOAD_CRITICAL_PERCENT`: `inFlight * 100 >= LOAD_CRITICAL_PERCENT * maxConcurrent`. This comparison uses the exact ratio, not rounded `percent`. `LOAD_CRITICAL_PERCENT` defaults to `80`, and valid values are whole numbers from `1` to `100`. Invalid values are handled by the individual service: some refuse to start, while others fall back to `80` with a warning. The service decides when its own load is critical, so Service Discovery needs no per-service thresholds. A service may add fields to `load` or consider additional resource limits when determining `critical`. For example, Discord DMs also considers open WebSockets using `WS_CRITICAL_CONNECTIONS`, because sockets are outside the concurrency limit. Service Discovery reads `load.critical` and stores the `load` object as-is. A critical instance remains `healthy` and keeps receiving traffic. Alerts are sent on changes only (`load.critical` false → true and back, `healthy` → `unhealthy` / `removed` and back), not on every poll.
 - **Reporting (Lab 3, grade 10).** A caller whose circuit breaker trips for an instance sends `report` with its own `serviceName` as `reporter` and a short `reason` (e.g. `"3 failures within the breaker window"`; the window itself is defined by the circuit breaker contract). The caller knows which instance failed from the `X-Instance-Id` header the Gateway adds to every forwarded response and to its own `502 BAD_GATEWAY` and `504 GATEWAY_TIMEOUT` (see Gateway); a response without that header (e.g. the Gateway's own `401` or `503`) counts against no instance. `report` moves the instance to `removed` at once, so it stops being returned to the Gateway, and resets its count of successful polls. Reporting an instance that is already `removed` answers `202` with no state change and no second alert, since the Gateway and the caller may both report the same instance.
+- **gRPC address and topics (Lab 4).** `grpcUrl` is `<container hostname>:<gRPC port>`, without a scheme, and is what the Broker dials for gRPC calls and event deliveries. `topics` lists the topics the instance subscribes to (see Messaging); each name must match the topic pattern, or the registration is `422 VALIDATION_FAILED`. Both are optional, so a Lab 3 registration is still valid, and registering again replaces them. `GET /topics` is built from the instances registered at that moment, in any state, so a subscriber whose instances are all down still counts: its events wait in the Broker's queue instead of being dropped.
 - **Choosing an instance** is the Gateway's job (round-robin over the healthy list). Services keep calling each other through the Gateway exactly as in Lab 2; they use Service Discovery only to register, heartbeat, deregister and report.
 - **Errors** use the shared envelope `{error: {code: string, message: string}}`: `401 UNAUTHORIZED`, `404 NOT_FOUND` (unknown instance on a write), `422 VALIDATION_FAILED` (missing or empty field, `url` not `http://` or `https://`, `statusPath` not starting with `/`), `500 INTERNAL_ERROR`. An unknown `serviceName` on `GET /services/{name}/instances` is not an error: it answers `200` with an empty `instances` list, since a service with no running instances is a normal state.
+
+#### Message Broker
+
+The messaging layer between the Gateway and the services, and between the services themselves (Lab 4). Python, our banned language, in its own private repo (`mihaelaaa-23/message-broker`). It listens on `3011` for HTTP and `50011` for gRPC inside the compose network (`http://message-broker:3011`, `message-broker:50011`), is not published to the host and is not reachable through the Gateway's prefixes: clients still only talk to the Gateway. Every HTTP request runs on its own thread (Lab 4, grade 7), and every log line carries that `thread`.
+
+| Method | Path | Request | Response |
+|---|---|---|---|
+| any | /{prefix}/{service path} | forwarded unchanged | the service's response, unchanged, plus `X-Instance-Id` |
+| GET | /topics | — | `{topics: [{topic: string, publisher: string, subscribers: string[]}]}` |
+| GET | /dead-letters | `?topic=string&subscriber=string&limit=int` (limit 1-200, default 50) | `{count: int, items: [deadLetter]}` |
+| GET | /metrics | — | Prometheus text format |
+| GET | /status | — | `{service: "message-broker", status: string, time: string, load: load}` |
+
+`deadLetter` is `{id: string, eventId: string, topic: string, subscriber: string, source: string, requestId: string, payload: object, reason: string, attempts: int, lastError: string, firstAttemptAt: string, deadAt: string}`.
+
+Notes for callers:
+
+- **Forwarding (Lab 4, grades 5 and 6).** The Broker takes over the forwarding the Gateway did in Lab 3, with the same shape: `/{prefix}/{service path}`, the same prefixes, the same headers (`X-Request-Id`, `X-Timeout-Ms`, `Authorization`, the caller headers) and the same error codes (`404 ROUTE_NOT_FOUND`, `502 BAD_GATEWAY`, `503 CONCURRENCY_LIMIT_REACHED`, `504 GATEWAY_TIMEOUT`, see the Gateway's table). The Gateway sends every client request to the Broker and names the target service by its prefix; the Broker picks an instance, applies the circuit breaker and returns the answer. Load balancing, the circuit breaker and the reports to Service Discovery move from the Gateway to the Broker; their rules (Circuit Breaker) do not change.
+- **Service-to-service calls** go through the Broker as well, over gRPC from grade 8 (see Messaging), and over this same HTTP route before that: in grade 5 a service only changes the base URL of a dependency from `http://gateway:3000/<prefix>` to `http://message-broker:3011/<prefix>`, so its error handling stays as it is.
+- **Topics (Lab 4, grade 7).** `GET /topics` lists every topic in the event catalogue (see Messaging), its publisher and the services subscribed to it, as read from Service Discovery.
+- **Dead Letter Channel (Lab 4, grade 9).** `GET /dead-letters` lists the events the Broker gave up delivering, newest first, filtered by `topic` and/or `subscriber`. `payload` is the event payload decoded as JSON. `reason` is `max_attempts` (still failing after `MAX_DELIVERY_ATTEMPTS`) or `rejected` (the subscriber answered with a status that retrying cannot fix).
+- `GET /status` and `GET /metrics` are outside the concurrency limit, like every service's `/status`.
+- The Broker registers itself with Service Discovery as `message-broker`, like every service.
+- Errors use the shared envelope `{error: {code: string, message: string}}`.
 
 #### Player Service
 | Method | Path | Request | Response |
@@ -590,6 +616,69 @@ Notes for callers:
 - When Session Service is unreachable — a network error, a timeout, `502 BAD_GATEWAY`, `504 GATEWAY_TIMEOUT` or any other `5xx`, including the Gateway's `503 CONCURRENCY_LIMIT_REACHED`, or its circuit breaker being open — the request is answered `503 DEPENDENCY_UNAVAILABLE` with `Retry-After: 1`. The check is skipped only when `SESSION_SERVICE_URL` is unset, which is the single-service setup described above.
 - The service listens on two ports: `WS_PORT` (`3008`) serves `/ws/...` alone and is the only one published, because a client connects to the socket directly after negotiating with the Gateway; `HTTP_PORT` (`3009`) serves every REST endpoint and `/status` and stays inside the network, so REST can only arrive through the Gateway. Anything that is not the socket on the WebSocket port answers `404` in the shared error envelope.
 - Errors come back as `{error: {code: string, message: string}}`.
+
+### Messaging (Lab 4)
+
+How the services talk to each other through the Message Broker: request/response over gRPC, and events over topics. The `.proto` files in [`proto/`](proto) are part of this contract, and this repo's copy is the source of truth.
+
+#### gRPC between services (grade 8)
+
+- **Which RPCs exist.** Only the calls one service makes to another, nothing a client calls:
+
+  | Callee | Service (`proto/`) | RPCs | Called by |
+  |---|---|---|---|
+  | Applicant | `applicant.v1.ApplicantService` | `GenerateApplicant`, `GetApplicant` | Session, Credential, Moderation |
+  | Credential | `credential.v1.CredentialService` | `IssueCredential`, `GetCredential`, `ValidateCredential` | Session, Moderation |
+  | Server Rules | `server_rules.v1.ServerRulesService` | `EvaluateRules` | Session, Moderation |
+  | University Record | `university_record.v1.UniversityRecordService` | `GetRecord` | Session, Applicant, Server Rules, Moderation |
+  | Session | `session.v1.SessionService` | `GetSession` | Discord DMs |
+
+  Player, Moderation and Discord DMs have no RPCs of their own: Session's XP award and Moderation's verdict announcement become events (below), and nothing calls Moderation. Every service that subscribes to a topic also serves `events.v1.EventSink/Deliver`.
+- **One address for every call.** A caller uses the generated client of the callee's proto, but connects it to the Broker (`BROKER_GRPC_URL`, `message-broker:50011`), never to the callee. The Broker reads the full method name (`/applicant.v1.ApplicantService/GetApplicant`), maps the package to the service (`applicant.v1` → `applicant-service`, the map is in `proto/broker/v1/broker.proto`), picks a healthy instance by its `grpcUrl` from Service Discovery, applies the circuit breaker and forwards the request bytes unchanged. Adding an RPC therefore needs no change in the Broker.
+- **Metadata.** Every call sends `x-request-id` (the request id), `authorization: Bearer <SERVICE_TOKEN>` and `x-caller-type: service`, and a deadline set to the caller's `HTTP_TIMEOUT_MS`. The deadline replaces `X-Timeout-Ms`: the Broker gives up on the instance when the remaining time runs out and passes the deadline on. The Broker adds `x-instance-id` to the trailing metadata of every answer, as `X-Instance-Id` on HTTP.
+- **Errors.** A gRPC error carries the team error code in the trailing metadata `x-error-code`, and a message. Callers decide on that code, as they decide on `error.code` over HTTP today:
+
+  | gRPC status | `x-error-code` | HTTP equivalent | Produced by |
+  |---|---|---|---|
+  | `NOT_FOUND` | `NOT_FOUND` | `404 NOT_FOUND` | the service |
+  | `INVALID_ARGUMENT` | `VALIDATION_FAILED` | `422 VALIDATION_FAILED` | the service |
+  | `ALREADY_EXISTS` | `CONFLICT` | `409 CONFLICT` | the service |
+  | `FAILED_PRECONDITION` | `DEPENDENCY_REFUSED` | `502 DEPENDENCY_REFUSED` | the service |
+  | `UNAVAILABLE` | `DEPENDENCY_UNAVAILABLE` | `503 DEPENDENCY_UNAVAILABLE` | the service |
+  | `RESOURCE_EXHAUSTED` | `CONCURRENCY_LIMIT_REACHED` | `503 CONCURRENCY_LIMIT_REACHED` | the service or the Broker |
+  | `DEADLINE_EXCEEDED` | `TASK_TIMEOUT` / `GATEWAY_TIMEOUT` | `504` | the service / the Broker |
+  | `UNAVAILABLE` | `BAD_GATEWAY` | `502 BAD_GATEWAY` | the Broker: instance unreachable, no healthy instance, or breaker open |
+  | `UNIMPLEMENTED` | `ROUTE_NOT_FOUND` | `404 ROUTE_NOT_FOUND` | the Broker: unknown package or method |
+  | `UNAUTHENTICATED` | `UNAUTHORIZED` | `401 UNAUTHORIZED` | the Broker or the service |
+  | `INTERNAL` | `INTERNAL_ERROR` | `500 INTERNAL_ERROR` | the service or the Broker |
+- **Ports.** A service's gRPC port is its REST port + 47000: Player `50001`, Session `50002`, Applicant `50003`, Credential `50004`, Server Rules `50005`, University Record `50006`, Moderation `50007`, Discord DMs `50009`, Broker `50011`. None is published to the host. A service still keeps its REST port for `/status` (Service Discovery polls it), `/metrics` and the routes users reach through the Gateway.
+- **Proto files in the service repos.** Every service copies `proto/` from this repo at a pinned commit into its own `proto/`, so it builds from its own repo in CI. Node services load them at runtime with `@grpc/proto-loader` (`keepCase: false`, `longs: String`, `enums: String`, `defaults: true`, `oneofs: true`); Go services generate code from them. A change goes into this repo first, through a PR, then every repo copies it. Fields are only added, never renumbered or reused.
+
+#### Topics and events (grade 6)
+
+- **Names.** `<domain>.<event>` in the past tense, lowercase, matching `^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$`. A topic exists when it is listed in the catalogue below; the Broker rejects `Publish` to any other topic with `INVALID_ARGUMENT`, so a typo is an error instead of an event nobody receives.
+- **Envelope.** `events.v1.Event` in `proto/events/v1/events.proto`: `{id, topic, source, requestId, timestamp, payload, contentType}`. `id` is a UUID chosen by the publisher, so a retried `Publish` is not enqueued twice. `payload` is JSON.
+- **Catalogue.**
+
+  | Topic | Publisher | Subscribers | Payload | Replaces |
+  |---|---|---|---|---|
+  | `session.ended` | Session | Player | `{sessionId: string, result: string, score: int, processedCount: int, awards: [{playerId: string, xpGained: int, reason: string}]}` | Session's `PATCH /players/{id}/xp` calls on `end` |
+  | `decision.recorded` | Moderation | Discord DMs | `{decisionId: string, sessionId: string, applicantId: string, decision: string, correct: boolean, decidedBy?: string}` | Moderation's best-effort verdict announcement to Discord DMs |
+  | `applicant.created` | Applicant | University Record | `{applicantId: string, name: string, studentId: string, major: string, year: int\|null, role: string, status: string}` | nothing yet: Applicant never told University Record about a new applicant |
+
+  No payload carries the applicant's `scenario` or any other ground-truth field.
+- **Publishing.** `broker.v1.Broker/Publish` over gRPC. It returns only once the event is stored for every subscriber, with the list of subscribers. A topic nobody subscribes to is not an error. A publisher publishes after its own write is committed, and a failed `Publish` is logged at `ERROR` without failing the request that caused it: the event is a consequence of that request, not part of it.
+- **Subscribing.** A service lists the topics it wants in `topics` when it registers with Service Discovery (`SD_TOPICS` in compose, comma-separated) and implements `events.v1.EventSink/Deliver` on its gRPC server.
+- **Delivery.** The Broker pushes each event to **one** healthy instance of **each** subscribing service, chosen like any other call, so two replicas of Player never both award the same XP. Delivery is **at-least-once**: an event can arrive again after a Broker restart or a lost acknowledgement, so every handler is idempotent. It stores the ids of the events it has processed in its own database and answers `Deliver` with `duplicate: true` for one it has already seen.
+- **Retries and the Dead Letter Channel (grade 9).** Events are queued in the Broker's own SQLite file on a named volume, and only removed once the subscriber has answered `OK`, so they survive a Broker restart. A delivery that fails with `UNAVAILABLE`, `DEADLINE_EXCEEDED`, `RESOURCE_EXHAUSTED` or `INTERNAL` is retried after `500 ms × 2^(attempt−1)` with jitter, capped at `30 s`, up to `MAX_DELIVERY_ATTEMPTS` (default `5`) attempts; then it moves to the Dead Letter Channel with `reason: "max_attempts"`. `INVALID_ARGUMENT`, `FAILED_PRECONDITION`, `NOT_FOUND` and `UNIMPLEMENTED` cannot succeed on a retry, so the event moves there at once with `reason: "rejected"`. `GET /dead-letters` lists them.
+- **Ordering.** Events of one topic reach a subscriber in publishing order as long as nothing is retried; a retried event can arrive after a later one. No handler may depend on the order.
+
+#### Decisions for Lab 4
+
+- **Gateway → Broker:** HTTP, with the Gateway's own `/{prefix}/{service path}` shape (above). gRPC is required only between services, and the Gateway forwards arbitrary client REST.
+- **Durable store:** one SQLite file in WAL mode on the named volume `broker_data`. Enqueueing and acknowledging are transactions, and the file can be inspected live with `sqlite3`.
+- **Circuit breakers in the services:** removed once a service calls its dependencies through the Broker (grade 5). The Broker sees every caller's traffic to an instance, while two breakers in a row would count the same failures twice. The services keep their per-call timeout, sent as `X-Timeout-Ms` and later as the gRPC deadline, and their `502`/`503` handling. Reports to Service Discovery now come only from the Broker (`reporter: "message-broker"`).
+- **Logs for the download endpoint (grade 4):** the services keep writing the Logging Convention's JSON lines to stdout; how they are collected is decided with the log endpoint.
 
 ### Circuit Breaker
 
