@@ -5,13 +5,53 @@
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{token}}", "type": "string"}]},
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Lab 3: every request carries its own X-Request-Id, so one click in Postman can be",
+          "// followed in the logs of every service it touched:",
+          "//   docker compose logs --no-log-prefix | grep '\"requestId\":\"<id>\"'",
+          "const slug = pm.info.requestName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');",
+          "const requestId = 'pm-applicant-' + slug + '-' + Date.now().toString(36);",
+          "pm.request.headers.upsert({ key: 'X-Request-Id', value: requestId });",
+          "pm.collectionVariables.set('lastRequestId', requestId);"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// The Gateway answers with the request id it used, and the Message Broker (Lab 4) names",
+          "// the instance it chose in X-Instance-Id. Send a request again to see the other replica.",
+          "const sentId = pm.collectionVariables.get('lastRequestId');",
+          "const instanceId = pm.response.headers.get('X-Instance-Id');",
+          "pm.test('the Gateway echoes the request id', function () {",
+          "  pm.expect(pm.response.headers.get('X-Request-Id')).to.eql(sentId);",
+          "});",
+          "if (pm.response.code < 500) {",
+          "  pm.test('the answering instance is named in X-Instance-Id', function () {",
+          "    pm.expect(instanceId, 'X-Instance-Id').to.be.a('string').and.not.empty;",
+          "  });",
+          "}",
+          "console.log(pm.info.requestName + ' -> ' + pm.response.code + ' from ' + (instanceId || 'no instance'));",
+          "console.log(\"logs: docker compose logs --no-log-prefix | grep '\\\"requestId\\\":\\\"\" + sentId + \"\\\"'\");"
+        ]
+      }
+    }
+  ],
   "variable": [
     { "key": "baseUrl", "value": "http://localhost:3000/applicant" },
     { "key": "applicantId", "value": "" },
     { "key": "playerUrl", "value": "http://localhost:3000/player" },
     { "key": "username", "value": "" },
     { "key": "playerId", "value": "" },
-    { "key": "token", "value": "" }
+    { "key": "token", "value": "" },
+    { "key": "lastRequestId", "value": "" }
   ],
   "item": [
     {
@@ -128,6 +168,41 @@
       "request": {
         "method": "GET",
         "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] }
+      }
+    },
+    {
+      "name": "Status Check",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('the database is reachable', function () { pm.expect(json.database).to.eql('up'); });",
+              "pm.test('reports load in the contract shape (Lab 3, grade 8)', function () {",
+              "  pm.expect(json.load).to.have.all.keys('inFlight', 'maxConcurrent', 'percent', 'critical');",
+              "  pm.expect(json.load.inFlight).to.be.a('number');",
+              "  pm.expect(json.load.maxConcurrent).to.be.above(0);",
+              "  pm.expect(json.load.critical).to.be.a('boolean');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "description": "Readiness of one Applicant Service instance: the MongoDB ping and the load field that Service Discovery reads every 5 s (Lab 3, grades 3 and 8). Send it again to see X-Instance-Id name the other replica: the Message Broker picks the less loaded one, in turn when both are idle (Lab 4, grade 10).",
+        "url": {
+          "raw": "{{baseUrl}}/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "status"
+          ]
+        }
       }
     },
     {
