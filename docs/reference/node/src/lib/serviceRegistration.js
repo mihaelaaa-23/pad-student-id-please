@@ -26,6 +26,10 @@ function createRegistration({
   instanceId,
   url,
   statusPath = '/status',
+  // Lab 4: where the Message Broker reaches this instance over gRPC ("host:port") and the
+  // topics it subscribes to. Sent only when given, so a Lab 3 service registers as before.
+  grpcUrl,
+  topics,
   token = () => process.env.SERVICE_TOKEN,
   heartbeatMs = 10000,
   requestTimeoutMs = 2000,
@@ -80,13 +84,16 @@ function createRegistration({
 
   async function register() {
     if (stopped) return;
-    const result = await call('POST', '/services/register', { serviceName, instanceId, url, statusPath }, requestTimeoutMs);
+    const body = { serviceName, instanceId, url, statusPath };
+    if (grpcUrl) body.grpcUrl = grpcUrl;
+    if (topics) body.topics = topics;
+    const result = await call('POST', '/services/register', body, requestTimeoutMs);
     if (stopped) return;
 
     if (result.status === 200 || result.status === 201) {
       registered = true;
       attempt = 0;
-      log.info({ ...target, url, status: result.status }, 'registered with service discovery');
+      log.info({ ...target, url, grpcUrl, topics, status: result.status }, 'registered with service discovery');
       schedule(heartbeat, heartbeatMs);
       return;
     }
@@ -179,14 +186,24 @@ function registrationFromEnv({ serviceName, instanceId, hostname, port, log, env
   // compose network. ADVERTISE_URL is only for a single instance run outside compose.
   const url = env.ADVERTISE_URL || `http://${hostname}:${port}`;
   const heartbeat = Number(env.SD_HEARTBEAT_MS);
+  // Lab 4: GRPC_PORT set means this instance serves gRPC on <container hostname>:<GRPC_PORT>.
+  const grpcUrl = env.GRPC_PORT ? `${hostname}:${env.GRPC_PORT}` : undefined;
   return createRegistration({
     sdUrl: env.SERVICE_DISCOVERY_URL,
     serviceName,
     instanceId,
     url,
+    grpcUrl,
+    topics: topicsFromEnv(env.SD_TOPICS),
     heartbeatMs: Number.isInteger(heartbeat) && heartbeat > 0 ? heartbeat : 10000,
     log,
   });
+}
+
+/** SD_TOPICS, comma-separated ("session.ended, applicant.created"), or undefined when unset. */
+function topicsFromEnv(value) {
+  if (value === undefined) return undefined;
+  return [...new Set(String(value).split(',').map((topic) => topic.trim()).filter(Boolean))];
 }
 
 /** BREAKER_MODE: 'log' (grade 7, the default) or 'remove' (grade 10). */
@@ -260,5 +277,5 @@ function instanceReporterFromEnv({ reporter, log, env = process.env, fetchFn = f
 }
 
 module.exports = {
-  createRegistration, registrationFromEnv, breakerMode, reportInstance, instanceReporterFromEnv, TARGET_SERVICE,
+  createRegistration, registrationFromEnv, topicsFromEnv, breakerMode, reportInstance, instanceReporterFromEnv, TARGET_SERVICE,
 };
