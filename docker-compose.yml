@@ -167,7 +167,7 @@ services:
       DB_USER: ${SESSION_DB_USER}
       DB_PASSWORD: ${SESSION_DB_PASSWORD}
       DB_NAME: ${SESSION_DB_NAME}
-      # Through the Gateway, like every service-to-service call (Lab 2, grade 6).
+      # Through the Message Broker, like every service-to-service call (Lab 4, grade 5).
       PLAYER_SERVICE_URL: http://message-broker:3011/player
       APPLICANT_SERVICE_URL: http://message-broker:3011/applicant
       CREDENTIAL_SERVICE_URL: http://message-broker:3011/credential
@@ -229,7 +229,7 @@ services:
       DB_USER: ${APPLICANT_DB_USER}
       DB_PASSWORD: ${APPLICANT_DB_PASSWORD}
       DB_NAME: ${APPLICANT_DB_NAME}
-      # Through the Gateway, like every service-to-service call (Lab 2, grade 6).
+      # Through the Message Broker, like every service-to-service call (Lab 4, grade 5).
       UNIVERSITY_RECORD_SERVICE_URL: http://message-broker:3011/university-record
       # Lab 2, grade 8: per-request task timeout (504 TASK_TIMEOUT) and concurrent
       # task limit (503 CONCURRENCY_LIMIT_REACHED). Test hooks stay off unless a
@@ -285,7 +285,7 @@ services:
       PORT: 3004
       STORE_DRIVER: mongo
       CREDENTIAL_SIGNING_SECRET: ${CREDENTIAL_SIGNING_SECRET}
-      # Through the Gateway, like every service-to-service call (Lab 2, grade 6).
+      # Through the Message Broker, like every service-to-service call (Lab 4, grade 5).
       # Unset would mean every request that needs Applicant Service answers
       # 503 DEPENDENCY_UNAVAILABLE even though the real service is running here.
       APPLICANT_SERVICE_URL: http://message-broker:3011/applicant
