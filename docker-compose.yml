@@ -3,30 +3,19 @@ services:
   # The single entry point. It waits only for Service Discovery: it reads the instance
   # list from it at startup and answers 502 BAD_GATEWAY for a service until it is up.
   gateway:
-    image: mihaela5/gateway:3.0.0
+    image: mihaela5/gateway:4.0.0-rc.1
     restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
       PORT: 3000
-      # Lab 3, grades 5 and 6: requests go to the healthy instances Service Discovery
-      # lists, in turn. The fixed URLs below stay for a service that does not register
-      # yet (README, Gateway notes, "Routing to instances").
+      # Lab 4, grade 5: every request goes to the Message Broker, which picks the instance
+      # and runs the circuit breaker (both moved there from the Gateway). The Gateway
+      # authenticates to it with SERVICE_TOKEN below.
+      MESSAGE_BROKER_URL: http://message-broker:3011
+      # Lab 3: the Gateway still registers itself, so Service Discovery health-polls it.
       SERVICE_DISCOVERY_URL: http://service-discovery:3010
       SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
-      # Lab 3, grades 7 and 10: remove reports a tripped instance to Service Discovery,
-      # which takes it out of rotation; log only logs it.
-      BREAKER_MODE: ${BREAKER_MODE:-remove}
-      PLAYER_SERVICE_URL: http://player-service:3001
-      SESSION_SERVICE_URL: http://session-service:3002
-      APPLICANT_SERVICE_URL: http://applicant-service:3003
-      CREDENTIAL_SERVICE_URL: http://credential-service:3004
-      RULES_SERVICE_URL: http://server-rules-service:3005
-      UNIVERSITY_RECORD_SERVICE_URL: http://university-record-service:3006
-      MODERATION_SERVICE_URL: http://moderation-service:3007
-      # Discord DMs serves REST on 3009; 3008 is the WebSocket listener alone, so
-      # forwarding there would answer 404 for every REST call.
-      DISCORD_DMS_SERVICE_URL: http://discord-dms-service:3009
       UPSTREAM_TIMEOUT_MS: ${GATEWAY_UPSTREAM_TIMEOUT_MS:-10000}
       # Lab 2, grade 8: requests forwarded at once, service-to-service calls included;
       # the next one gets 503 CONCURRENCY_LIMIT_REACHED with Retry-After: 1. Far above a
@@ -51,6 +40,8 @@ services:
     depends_on:
       service-discovery:
         condition: service_started
+      message-broker:
+        condition: service_started
 
   # ==================== Service Discovery (Ciprian) ====================
   # Internal registry; no host port is published. This image defines its own
@@ -72,7 +63,7 @@ services:
   # published: only the Gateway and the services reach it, with the service token.
   # One thread per request; GET /status stays outside its concurrency limit.
   message-broker:
-    image: mihaela5/message-broker:4.0.0-rc.1
+    image: mihaela5/message-broker:4.0.0-rc.3
     restart: unless-stopped
     environment:
       PORT: 3011
@@ -161,7 +152,7 @@ services:
 
   # ==================== Server Moderation Session Service (Mihaela) ====================
   session-service:
-    image: mihaela5/session-service:3.0.0
+    image: mihaela5/session-service:4.0.0-rc.1
     restart: unless-stopped
     # Lab 3, grade 5: two instances; sessions live in session-db, so any instance can
     # serve any session.
@@ -177,11 +168,11 @@ services:
       DB_PASSWORD: ${SESSION_DB_PASSWORD}
       DB_NAME: ${SESSION_DB_NAME}
       # Through the Gateway, like every service-to-service call (Lab 2, grade 6).
-      PLAYER_SERVICE_URL: http://gateway:3000/player
-      APPLICANT_SERVICE_URL: http://gateway:3000/applicant
-      CREDENTIAL_SERVICE_URL: http://gateway:3000/credential
-      RULES_SERVICE_URL: http://gateway:3000/server-rules
-      UNIVERSITY_RECORD_SERVICE_URL: http://gateway:3000/university-record
+      PLAYER_SERVICE_URL: http://message-broker:3011/player
+      APPLICANT_SERVICE_URL: http://message-broker:3011/applicant
+      CREDENTIAL_SERVICE_URL: http://message-broker:3011/credential
+      RULES_SERVICE_URL: http://message-broker:3011/server-rules
+      UNIVERSITY_RECORD_SERVICE_URL: http://message-broker:3011/university-record
       # Lab 2, grade 8: task timeout (504 TASK_TIMEOUT) and concurrent task limit
       # (503 CONCURRENCY_LIMIT_REACHED). Timeout budget (README, Gateway notes): 4500 per
       # outgoing call > every callee's TASK_TIMEOUT_MS; own cap 8000 < the Gateway's 10000.
@@ -239,7 +230,7 @@ services:
       DB_PASSWORD: ${APPLICANT_DB_PASSWORD}
       DB_NAME: ${APPLICANT_DB_NAME}
       # Through the Gateway, like every service-to-service call (Lab 2, grade 6).
-      UNIVERSITY_RECORD_SERVICE_URL: http://gateway:3000/university-record
+      UNIVERSITY_RECORD_SERVICE_URL: http://message-broker:3011/university-record
       # Lab 2, grade 8: per-request task timeout (504 TASK_TIMEOUT) and concurrent
       # task limit (503 CONCURRENCY_LIMIT_REACHED). Test hooks stay off unless a
       # demo of the 503/504 turns them on through .env.
@@ -297,7 +288,7 @@ services:
       # Through the Gateway, like every service-to-service call (Lab 2, grade 6).
       # Unset would mean every request that needs Applicant Service answers
       # 503 DEPENDENCY_UNAVAILABLE even though the real service is running here.
-      APPLICANT_SERVICE_URL: http://gateway:3000/applicant
+      APPLICANT_SERVICE_URL: http://message-broker:3011/applicant
       DB_HOST: credential-db
       DB_PORT: 27017
       DB_USER: ${CREDENTIAL_DB_USER}
@@ -357,7 +348,7 @@ services:
       DB_USER: ${RULES_DB_USER}
       DB_PASSWORD: ${RULES_DB_PASSWORD}
       DB_NAME: ${RULES_DB_NAME}
-      UNIVERSITY_RECORD_SERVICE_URL: http://gateway:3000/university-record
+      UNIVERSITY_RECORD_SERVICE_URL: http://message-broker:3011/university-record
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
       TASK_TIMEOUT_MS: ${RULES_TASK_TIMEOUT_MS:-3000}
       MAX_CONCURRENT_TASKS: ${RULES_MAX_CONCURRENT_TASKS:-50}
@@ -442,11 +433,11 @@ services:
     # at http://localhost:3000/moderation.
     environment:
       PORT: 3007
-      APPLICANT_SERVICE_URL: http://gateway:3000/applicant
-      CREDENTIAL_SERVICE_URL: http://gateway:3000/credential
-      RULES_SERVICE_URL: http://gateway:3000/server-rules
-      UNIVERSITY_RECORD_SERVICE_URL: http://gateway:3000/university-record
-      DISCORD_DMS_SERVICE_URL: http://gateway:3000/discord-dms
+      APPLICANT_SERVICE_URL: http://message-broker:3011/applicant
+      CREDENTIAL_SERVICE_URL: http://message-broker:3011/credential
+      RULES_SERVICE_URL: http://message-broker:3011/server-rules
+      UNIVERSITY_RECORD_SERVICE_URL: http://message-broker:3011/university-record
+      DISCORD_DMS_SERVICE_URL: http://message-broker:3011/discord-dms
       # Lab 2, grade 10: sent as Authorization: Bearer on every outgoing call, so the
       # Gateway lets this service's own requests through.
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
@@ -509,7 +500,7 @@ services:
       HTTP_PORT: 3009
       MONGODB_URI: mongodb://${DISCORD_DMS_DB_USER}:${DISCORD_DMS_DB_PASSWORD}@discord-dms-db:27017/?authSource=admin
       MONGODB_DATABASE: ${DISCORD_DMS_DB_NAME}
-      SESSION_SERVICE_URL: http://gateway:3000/session
+      SESSION_SERVICE_URL: http://message-broker:3011/session
       WS_TICKET_SECRET: ${WS_TICKET_SECRET:-}
       # Lab 2, grade 10: sent as Authorization: Bearer on the session check, so the
       # Gateway lets this service's own request through.
