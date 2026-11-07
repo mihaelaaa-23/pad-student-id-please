@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+// The Message Broker's own gRPC API (Lab 4).
+//
+// Request/response between services (Grade 8) does NOT use this service.
+// A caller uses the generated client of the callee's proto (for example
+// applicant.v1.ApplicantService) but dials the Broker's address
+// (BROKER_GRPC_URL). The Broker reads the full method name, e.g.
+// "/applicant.v1.ApplicantService/GetApplicant", maps the package to the
+// target service, picks an instance, applies the circuit breaker and forwards
+// the request bytes unchanged. Package -> service map:
+//
+//   applicant.v1          -> applicant-service
+//   credential.v1         -> credential-service
+//   server_rules.v1       -> server-rules-service
+//   university_record.v1  -> university-record-service
+//   session.v1            -> session-service
+//
+// Metadata every caller sends and the Broker forwards:
+//   x-request-id   the request id (same value as the X-Request-Id header)
+//   authorization  "Bearer <SERVICE_TOKEN>"
+//   x-caller-type  "service"
+// and a deadline (the gRPC equivalent of X-Timeout-Ms).
+package broker.v1;
+
+import "events/v1/events.proto";
+
+option go_package = "github.com/mihaelaaa-23/pad-student-id-please/proto/gen/go/broker/v1;brokerv1";
+
+message PublishAck {
+  string event_id = 1;
+  // serviceNames the event was enqueued for. Empty when nobody subscribes,
+  // which is not an error: a publisher must not depend on who listens.
+  repeated string subscribers = 2;
+  // True when an event with this id was already accepted (a retried Publish).
+  bool duplicate = 3;
+}
+
+service Broker {
+  // Returns only after the event is stored for every subscriber.
+  // INVALID_ARGUMENT for an undeclared topic or a malformed envelope,
+  // UNAUTHENTICATED without a valid service token.
+  rpc Publish(events.v1.Event) returns (PublishAck);
+}
