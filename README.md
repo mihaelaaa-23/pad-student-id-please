@@ -320,6 +320,24 @@ Notes for callers:
 - **Load reporting (Lab 3, grade 8).** The shared fields reported by task-controlled application services in their `/status` `load` object are `{inFlight: int, maxConcurrent: int, percent: int, critical: boolean}`. `inFlight` is the number of requests currently counted by the service's task-control middleware; `maxConcurrent` is `MAX_CONCURRENT_TASKS`; `percent` is the rounded integer percentage of concurrency capacity in use. For concurrency-based load, `critical` is true when the exact ratio reaches `LOAD_CRITICAL_PERCENT`: `inFlight * 100 >= LOAD_CRITICAL_PERCENT * maxConcurrent`. This comparison uses the exact ratio, not rounded `percent`. `LOAD_CRITICAL_PERCENT` defaults to `80`, and valid values are whole numbers from `1` to `100`. Invalid values are handled by the individual service: some refuse to start, while others fall back to `80` with a warning. The service decides when its own load is critical, so Service Discovery needs no per-service thresholds. A service may add fields to `load` or consider additional resource limits when determining `critical`. For example, Discord DMs also considers open WebSockets using `WS_CRITICAL_CONNECTIONS`, because sockets are outside the concurrency limit. Service Discovery reads `load.critical` and stores the `load` object as-is. A critical instance remains `healthy` and keeps receiving traffic. Alerts are sent on changes only (`load.critical` false → true and back, `healthy` → `unhealthy` / `removed` and back), not on every poll.
 - **Reporting (Lab 3, grade 10).** A caller whose circuit breaker trips for an instance sends `report` with its own `serviceName` as `reporter` and a short `reason` (e.g. `"3 failures within the breaker window"`; the window itself is defined by the circuit breaker contract). The caller knows which instance failed from the `X-Instance-Id` header the Gateway adds to every forwarded response and to its own `502 BAD_GATEWAY` and `504 GATEWAY_TIMEOUT` (see Gateway); a response without that header (e.g. the Gateway's own `401` or `503`) counts against no instance. `report` moves the instance to `removed` at once, so it stops being returned to the Gateway, and resets its count of successful polls. Reporting an instance that is already `removed` answers `202` with no state change and no second alert, since the Gateway and the caller may both report the same instance.
 - **gRPC address and topics (Lab 4).** `grpcUrl` is `<container hostname>:<gRPC port>`, without a scheme, and is what the Broker dials for gRPC calls and event deliveries. `topics` lists the topics the instance subscribes to (see Messaging); each name must match the topic pattern, or the registration is `422 VALIDATION_FAILED`. Both are optional, so a Lab 3 registration is still valid, and registering again replaces them. `GET /topics` is built from the instances registered at that moment, in any state, so a subscriber whose instances are all down still counts: its events wait in the Broker's queue instead of being dropped.
+
+  Example: a University Record instance that subscribes to `applicant.created`:
+
+  ```http
+  POST /services/register
+  Authorization: Bearer <SERVICE_TOKEN>
+  Content-Type: application/json
+
+  {"serviceName": "university-record-service", "instanceId": "university-record-service-3f2a", "url": "http://3f2a91c0d1e4:3006", "statusPath": "/status", "grpcUrl": "3f2a91c0d1e4:50006", "topics": ["applicant.created"]}
+  ```
+
+  `201 Created` (`200 OK` when the instance was already registered):
+
+  ```json
+  {"serviceName": "university-record-service", "instanceId": "university-record-service-3f2a", "url": "http://3f2a91c0d1e4:3006", "state": "healthy", "registeredAt": "2026-11-07T13:05:12.481Z"}
+  ```
+
+  `GET /topics` then answers `{"topics": {"applicant.created": ["university-record-service"]}}`, and the instance in `GET /services` carries `"grpcUrl": "3f2a91c0d1e4:50006", "topics": ["applicant.created"]`.
 - **Choosing an instance** is the Gateway's job (round-robin over the healthy list). Services keep calling each other through the Gateway exactly as in Lab 2; they use Service Discovery only to register, heartbeat, deregister and report.
 - **Errors** use the shared envelope `{error: {code: string, message: string}}`: `401 UNAUTHORIZED`, `404 NOT_FOUND` (unknown instance on a write), `422 VALIDATION_FAILED` (missing or empty field, `url` not `http://` or `https://`, `statusPath` not starting with `/`), `500 INTERNAL_ERROR`. An unknown `serviceName` on `GET /services/{name}/instances` is not an error: it answers `200` with an empty `instances` list, since a service with no running instances is a normal state.
 
