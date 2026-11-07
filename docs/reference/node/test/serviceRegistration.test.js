@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const express = require('express');
 
-const { createRegistration, registrationFromEnv } = require('../src/lib/serviceRegistration');
+const { createRegistration, registrationFromEnv, topicsFromEnv } = require('../src/lib/serviceRegistration');
 
 const TOKEN = 'service-token-that-must-never-be-logged-0123456789';
 
@@ -358,4 +358,35 @@ test('instanceReporterFromEnv: nothing in log mode, a report per trip in remove 
 
   assert.equal(http.calls.length, 1);
   assert.equal(http.calls[0].body.reason, '3 failures within the breaker window of 8750 ms');
+});
+
+test('registrationFromEnv (Lab 4): GRPC_PORT and SD_TOPICS add grpcUrl and topics, absent otherwise', async () => {
+  const { log } = fakeLog();
+  const args = { serviceName: 'university-record-service', instanceId: 'university-record-service-3f2a', hostname: '3f2a91c0d1e4', port: 3006, log };
+  const bodies = [];
+  const original = global.fetch;
+  global.fetch = async (url, options) => { bodies.push(options.body && JSON.parse(options.body)); return { status: 201 }; };
+  try {
+    const lab4 = registrationFromEnv({
+      ...args, env: { SERVICE_DISCOVERY_URL: 'http://sd:3010', GRPC_PORT: '50006', SD_TOPICS: 'applicant.created, applicant.created,,decision.recorded' },
+    });
+    const lab3 = registrationFromEnv({ ...args, env: { SERVICE_DISCOVERY_URL: 'http://sd:3010' } });
+    await lab4.start();
+    await lab3.start();
+    await lab4.stop();
+    await lab3.stop();
+  } finally {
+    global.fetch = original;
+  }
+
+  assert.equal(bodies[0].grpcUrl, '3f2a91c0d1e4:50006');
+  assert.deepEqual(bodies[0].topics, ['applicant.created', 'decision.recorded']);
+  assert.equal('grpcUrl' in bodies[1], false);
+  assert.equal('topics' in bodies[1], false);
+});
+
+test('topicsFromEnv: comma-separated, trimmed, without duplicates or empty names', () => {
+  assert.equal(topicsFromEnv(undefined), undefined);
+  assert.deepEqual(topicsFromEnv(''), []);
+  assert.deepEqual(topicsFromEnv(' session.ended ,applicant.created,session.ended'), ['session.ended', 'applicant.created']);
 });
