@@ -14,7 +14,7 @@ syntax = "proto3";
 //   credential.v1         -> credential-service
 //   server_rules.v1       -> server-rules-service
 //   university_record.v1  -> university-record-service
-//   session.v1            -> server-moderation-session-service
+//   session.v1            -> session-service
 //
 // Metadata every caller sends and the Broker forwards:
 //   x-request-id   the request id (same value as the X-Request-Id header)
