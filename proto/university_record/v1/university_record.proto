@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+// University Record Service RPCs called by other services (Lab 4, Grade 8).
+// Draft: owner (University Record) to confirm the RPC list and fields.
+package university_record.v1;
+
+import "google/protobuf/struct.proto";
+
+option go_package = "github.com/mihaelaaa-23/pad-student-id-please/proto/gen/go/university_record/v1;universityrecordv1";
+
+message GetRecordRequest {
+  string applicant_id = 1;
+  // Required: the fields returned are scoped to this player's access.
+  // Services that act on their own use their serviceName, e.g. "server-rules-service".
+  string requesting_player_id = 2;
+}
+
+message Record {
+  string applicant_id = 1;
+  // Scoped per requesting player, so the set of keys varies: a Struct keeps
+  // the REST "fields: object" semantics instead of a fixed message.
+  google.protobuf.Struct fields = 2;
+}
+
+service UniversityRecordService {
+  // Session, Applicant, Server Rules, Moderation.
+  // NOT_FOUND when the applicant has no record (a real answer, not a failure),
+  // INVALID_ARGUMENT without requesting_player_id. REST: GET /records/{applicantId}.
+  rpc GetRecord(GetRecordRequest) returns (Record);
+}
