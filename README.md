@@ -339,7 +339,20 @@ The messaging layer between the Gateway and the services, and between the servic
 
 Notes for callers:
 
-- **Forwarding (Lab 4, grades 5 and 6).** The Broker takes over the forwarding the Gateway did in Lab 3, with the same shape: `/{prefix}/{service path}`, the same prefixes, the same headers (`X-Request-Id`, `X-Timeout-Ms`, `Authorization`, the caller headers) and the same error codes (`404 ROUTE_NOT_FOUND`, `502 BAD_GATEWAY`, `503 CONCURRENCY_LIMIT_REACHED`, `504 GATEWAY_TIMEOUT`, see the Gateway's table). The Gateway sends every client request to the Broker and names the target service by its prefix; the Broker picks an instance, applies the circuit breaker and returns the answer. Load balancing, the circuit breaker and the reports to Service Discovery move from the Gateway to the Broker; their rules (Circuit Breaker) do not change.
+- **Forwarding (Lab 4, grades 5 and 6).** The Broker takes over the forwarding the Gateway did in Lab 3, with the same shape: `/{prefix}/{service path}`, the same prefixes and the same `X-Request-Id`, `X-Timeout-Ms` and caller headers (`X-Caller-Type`, `X-Player-Id`). The Gateway sends every client request to the Broker and names the target service by its prefix; the Broker picks an instance, applies the circuit breaker and returns the answer. Load balancing, the circuit breaker and the reports to Service Discovery move from the Gateway to the Broker; their rules (Circuit Breaker) do not change.
+- **Authorization.** Every request to the Broker carries `Authorization: Bearer <SERVICE_TOKEN>`, whoever made it: a service sends the service token as it did to the Gateway, and the Gateway, after validating a client's player token, replaces it with the service token and sets `X-Caller-Type` and `X-Player-Id` from it. A client's token never goes past the Gateway. The Broker checks the token in constant time and never forwards `Authorization` to a service; a request without `X-Caller-Type` is forwarded with `X-Caller-Type: service`.
+- **Errors of the Broker itself.** Every other answer is the service's, forwarded unchanged.
+
+  | Status | Code | When |
+  |---|---|---|
+  | `401` | `UNAUTHORIZED` | no service token, or the wrong one; sent with `WWW-Authenticate: Bearer`, the request is not forwarded |
+  | `404` | `ROUTE_NOT_FOUND` | the first path segment is not a known prefix |
+  | `502` | `BAD_GATEWAY` | the instance is unreachable or answered more than the Broker's body limit (with its `X-Instance-Id`), or Service Discovery lists no healthy instance of the service (without one) |
+  | `503` | `CIRCUIT_OPEN` | the service's circuit breaker is open or testing; sent with `Retry-After` in seconds, the request is not forwarded |
+  | `503` | `CONCURRENCY_LIMIT_REACHED` | `MAX_CONCURRENT_TASKS` requests are already in progress in the Broker; sent with `Retry-After: 1` |
+  | `504` | `GATEWAY_TIMEOUT` | the instance did not answer within `UPSTREAM_TIMEOUT_MS`, or within `X-Timeout-Ms − 200`; carries the instance's `X-Instance-Id` |
+
+  `CIRCUIT_OPEN` is the Broker's own code: `503 DEPENDENCY_UNAVAILABLE` keeps meaning "the service is fine, one of its own dependencies is not", and the Broker never produces it. A caller treats `CIRCUIT_OPEN` like any other unavailable dependency.
 - **Service-to-service calls** go through the Broker as well, over gRPC from grade 8 (see Messaging), and over this same HTTP route before that: in grade 5 a service only changes the base URL of a dependency from `http://gateway:3000/<prefix>` to `http://message-broker:3011/<prefix>`, so its error handling stays as it is.
 - **Topics (Lab 4, grade 7).** `GET /topics` lists every topic in the event catalogue (see Messaging), its publisher and the services subscribed to it, as read from Service Discovery.
 - **Dead Letter Channel (Lab 4, grade 9).** `GET /dead-letters` lists the events the Broker gave up delivering, newest first, filtered by `topic` and/or `subscriber`. `payload` is the event payload decoded as JSON. `reason` is `max_attempts` (still failing after `MAX_DELIVERY_ATTEMPTS`) or `rejected` (the subscriber answered with a status that retrying cannot fix).
@@ -635,7 +648,7 @@ How the services talk to each other through the Message Broker: request/response
 
   Player, Moderation and Discord DMs have no RPCs of their own: Session's XP award and Moderation's verdict announcement become events (below), and nothing calls Moderation. Every service that subscribes to a topic also serves `events.v1.EventSink/Deliver`.
 - **One address for every call.** A caller uses the generated client of the callee's proto, but connects it to the Broker (`BROKER_GRPC_URL`, `message-broker:50011`), never to the callee. The Broker reads the full method name (`/applicant.v1.ApplicantService/GetApplicant`), maps the package to the service (`applicant.v1` → `applicant-service`, the map is in `proto/broker/v1/broker.proto`), picks a healthy instance by its `grpcUrl` from Service Discovery, applies the circuit breaker and forwards the request bytes unchanged. Adding an RPC therefore needs no change in the Broker.
-- **Metadata.** Every call sends `x-request-id` (the request id), `authorization: Bearer <SERVICE_TOKEN>` and `x-caller-type: service`, and a deadline set to the caller's `HTTP_TIMEOUT_MS`. The deadline replaces `X-Timeout-Ms`: the Broker gives up on the instance when the remaining time runs out and passes the deadline on. The Broker adds `x-instance-id` to the trailing metadata of every answer, as `X-Instance-Id` on HTTP.
+- **Metadata.** Every call sends `x-request-id` (the request id), `authorization: Bearer <SERVICE_TOKEN>` and `x-caller-type: service`, and a deadline set to the caller's `HTTP_TIMEOUT_MS`. As over HTTP, the Broker checks the token and does not forward `authorization` to the service. The deadline replaces `X-Timeout-Ms`, with the same 200 ms margin: the Broker gives the instance the remaining time minus 200 ms, so its own `DEADLINE_EXCEEDED` with the instance's `x-instance-id` reaches the caller before the caller's deadline fires. A call with less than 200 ms left gets the Broker's `DEADLINE_EXCEEDED` at once, without being forwarded. The Broker adds `x-instance-id` to the trailing metadata of every answer, as `X-Instance-Id` on HTTP.
 - **Errors.** A gRPC error carries the team error code in the trailing metadata `x-error-code`, and a message. Callers decide on that code, as they decide on `error.code` over HTTP today:
 
   | gRPC status | `x-error-code` | HTTP equivalent | Produced by |
@@ -646,8 +659,9 @@ How the services talk to each other through the Message Broker: request/response
   | `FAILED_PRECONDITION` | `DEPENDENCY_REFUSED` | `502 DEPENDENCY_REFUSED` | the service |
   | `UNAVAILABLE` | `DEPENDENCY_UNAVAILABLE` | `503 DEPENDENCY_UNAVAILABLE` | the service |
   | `RESOURCE_EXHAUSTED` | `CONCURRENCY_LIMIT_REACHED` | `503 CONCURRENCY_LIMIT_REACHED` | the service or the Broker |
-  | `DEADLINE_EXCEEDED` | `TASK_TIMEOUT` / `GATEWAY_TIMEOUT` | `504` | the service / the Broker |
-  | `UNAVAILABLE` | `BAD_GATEWAY` | `502 BAD_GATEWAY` | the Broker: instance unreachable, no healthy instance, or breaker open |
+  | `DEADLINE_EXCEEDED` | `TASK_TIMEOUT` / `GATEWAY_TIMEOUT` | `504` | the service / the Broker, 200 ms before the caller's deadline |
+  | `UNAVAILABLE` | `BAD_GATEWAY` | `502 BAD_GATEWAY` | the Broker: instance unreachable, or no healthy instance |
+  | `UNAVAILABLE` | `CIRCUIT_OPEN` | `503 CIRCUIT_OPEN` | the Broker: the service's breaker is open; trailer `retry-after` in seconds |
   | `UNIMPLEMENTED` | `ROUTE_NOT_FOUND` | `404 ROUTE_NOT_FOUND` | the Broker: unknown package or method |
   | `UNAUTHENTICATED` | `UNAUTHORIZED` | `401 UNAUTHORIZED` | the Broker or the service |
   | `INTERNAL` | `INTERNAL_ERROR` | `500 INTERNAL_ERROR` | the service or the Broker |
@@ -667,6 +681,8 @@ How the services talk to each other through the Message Broker: request/response
   | `applicant.created` | Applicant | University Record | `{applicantId: string, name: string, studentId: string, major: string, year: int\|null, role: string, status: string}` | nothing yet: Applicant never told University Record about a new applicant |
 
   No payload carries the applicant's `scenario` or any other ground-truth field.
+
+  Handling `session.ended` in Player: the awards of one event are applied in one transaction, together with the event id that makes the handler idempotent. A `playerId` that no longer exists (the account was deleted) is skipped with a `WARN` naming it, and the others are still awarded, so the handler answers `OK`. Answering `NOT_FOUND` would send the whole event to the Dead Letter Channel and every other player in it would lose their XP.
 - **Publishing.** `broker.v1.Broker/Publish` over gRPC. It returns only once the event is stored for every subscriber, with the list of subscribers. A topic nobody subscribes to is not an error. A publisher publishes after its own write is committed, and a failed `Publish` is logged at `ERROR` without failing the request that caused it: the event is a consequence of that request, not part of it.
 - **Subscribing.** A service lists the topics it wants in `topics` when it registers with Service Discovery (`SD_TOPICS` in compose, comma-separated) and implements `events.v1.EventSink/Deliver` on its gRPC server.
 - **Delivery.** The Broker pushes each event to **one** healthy instance of **each** subscribing service, chosen like any other call, so two replicas of Player never both award the same XP. Delivery is **at-least-once**: an event can arrive again after a Broker restart or a lost acknowledgement, so every handler is idempotent. It stores the ids of the events it has processed in its own database and answers `Deliver` with `duplicate: true` for one it has already seen.
