@@ -348,7 +348,7 @@ The messaging layer between the Gateway and the services, and between the servic
 | Method | Path | Request | Response |
 |---|---|---|---|
 | any | /{prefix}/{service path} | forwarded unchanged | the service's response, unchanged, plus `X-Instance-Id` |
-| GET | /topics | — | `{topics: [{topic: string, publisher: string, subscribers: string[]}]}` |
+| GET | /topics | — | `{topics: [{topic: string, publisher: string, subscribers: string[], queued: int}]}` |
 | GET | /dead-letters | `?topic=string&subscriber=string&limit=int` (limit 1-200, default 50) | `{count: int, items: [deadLetter]}` |
 | GET | /metrics | — | Prometheus text format |
 | GET | /status | — | `{service: "message-broker", status: string, time: string, load: load}` |
