@@ -112,8 +112,6 @@ It does **not** own any player, session, applicant, credential, rule, record, de
 
 ![Architecture](./docs/architecture.png)
 
-The source of the diagram is [`docs/architecture.excalidraw`](./docs/architecture.excalidraw): open it on excalidraw.com to edit it, then export it as PNG at 3× over `docs/architecture.png`.
-
 The Client reaches the system only through the **API Gateway** (`:3000`, Python, one instance). It sends every REST request with `Authorization: Bearer <token>`; the Gateway validates the token, does not forward it, and passes the caller on as `X-Caller-Type` / `X-Player-Id`. Since Lab 4 it forwards every request to the **Message Broker** with the service token and `X-Timeout-Ms`, and no longer balances, breaks circuits or exposes routes only services call (`404 ROUTE_NOT_FOUND`). The only traffic that bypasses it is the Discord DMs WebSocket (blue): the Client first gets a URL and a signed 60-second ticket from `POST /ws/negotiate`, then connects to Discord DMs on `:3008` directly.
 
 The **Message Broker** (`:3011` HTTP, `:50011` gRPC, Python, one instance) is in the middle of all traffic between services:
