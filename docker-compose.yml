@@ -3,7 +3,7 @@ services:
   # The single entry point. It waits only for Service Discovery: it reads the instance
   # list from it at startup and answers 502 BAD_GATEWAY for a service until it is up.
   gateway:
-    image: mihaela5/gateway:4.0.0-rc.1
+    image: mihaela5/gateway:4.0.0-rc.2
     restart: unless-stopped
     ports:
       - "3000:3000"
@@ -47,7 +47,7 @@ services:
   # Internal registry; no host port is published. This image defines its own
   # Docker health check on /health.
   service-discovery:
-    image: ciprik13/service-discovery:3.0.0
+    image: ciprik13/service-discovery:4.0.0-rc.1
     restart: unless-stopped
     environment:
       PORT: 3010
@@ -63,7 +63,7 @@ services:
   # published: only the Gateway and the services reach it, with the service token.
   # One thread per request; GET /status stays outside its concurrency limit.
   message-broker:
-    image: mihaela5/message-broker:4.0.0-rc.3
+    image: mihaela5/message-broker:4.0.0-rc.4
     restart: unless-stopped
     environment:
       PORT: 3011
@@ -71,8 +71,13 @@ services:
       # Every forwarded request must carry it (Authorization: Bearer); the Broker also
       # registers with Service Discovery with it.
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
-      # Round-robin over the healthy instances Service Discovery lists; the fixed URLs
-      # below stay for a service it does not list.
+      # The least-loaded healthy instance Service Discovery lists (LB_STRATEGY=load); the
+      # fixed URLs below stay for a service it does not list.
+      # Lab 4: gRPC (Publish, topic deliveries, service-to-service calls) on 50011, inside
+      # the compose network only. Its own limit matches MAX_CONCURRENT_TASKS, so the
+      # Broker's shared limit is the one a gRPC caller meets.
+      BROKER_GRPC_PORT: 50011
+      GRPC_MAX_CONCURRENT_RPCS: ${MESSAGE_BROKER_MAX_CONCURRENT_TASKS:-500}
       SERVICE_DISCOVERY_URL: http://service-discovery:3010
       SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
       BREAKER_MODE: ${BREAKER_MODE:-remove}
@@ -95,7 +100,7 @@ services:
 
   # ==================== Player Service (Mihaela) ====================
   player-service:
-    image: mihaela5/player-service:3.0.0
+    image: mihaela5/player-service:4.0.0-rc.1
     restart: unless-stopped
     # Lab 3, grade 5: two instances. Each registers its own container hostname with
     # Service Discovery, so there is no fixed host port and no container_name.
@@ -128,6 +133,11 @@ services:
       SERVICE_DISCOVERY_URL: http://service-discovery:3010
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
       SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
+      # Lab 4, grades 6 and 8: serves events.v1.EventSink/Deliver on 50001 and subscribes
+      # to session.ended, both sent with the registration, so the Broker delivers the shift
+      # XP to it (idempotent by event id).
+      GRPC_PORT: 50001
+      SD_TOPICS: session.ended
     depends_on:
       player-db:
         condition: service_healthy
@@ -152,7 +162,7 @@ services:
 
   # ==================== Server Moderation Session Service (Mihaela) ====================
   session-service:
-    image: mihaela5/session-service:4.0.0-rc.1
+    image: mihaela5/session-service:4.0.0-rc.2
     restart: unless-stopped
     # Lab 3, grade 5: two instances; sessions live in session-db, so any instance can
     # serve any session.
@@ -185,14 +195,23 @@ services:
       # Lab 2, grade 10: sent as Authorization: Bearer on every outgoing call, so the
       # Gateway lets this service's own requests through.
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
-      # Lab 3: register with Service Discovery; circuit breaker on the five dependencies.
+      # Lab 3: register with Service Discovery. Since Lab 4 the circuit breaker on the
+      # dependencies is the Broker's, so Session has none of its own.
       SERVICE_DISCOVERY_URL: http://service-discovery:3010
       SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
-      BREAKER_MODE: ${BREAKER_MODE:-remove}
+      # Lab 4, grade 8: serves session.v1.SessionService/GetSession on 50002 for Discord
+      # DMs, registered with Service Discovery as its grpcUrl.
+      GRPC_PORT: 50002
+      # Lab 4, grade 6: ending a shift publishes one session.ended event to the Broker
+      # instead of a PATCH /players/{id}/xp per participant; Player subscribes to it.
+      BROKER_GRPC_URL: message-broker:50011
+      PUBLISH_TIMEOUT_MS: ${SESSION_PUBLISH_TIMEOUT_MS:-1500}
     depends_on:
       session-db:
         condition: service_healthy
       service-discovery:
+        condition: service_started
+      message-broker:
         condition: service_started
 
   session-db:
