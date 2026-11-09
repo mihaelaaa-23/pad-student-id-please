@@ -112,28 +112,34 @@ It does **not** own any player, session, applicant, credential, rule, record, de
 
 ![Architecture](./docs/architecture.png)
 
-The Client reaches the system only through the **API Gateway** (`:3000`, Python, one instance). It sends every REST request with `Authorization: Bearer <token>`; the Gateway validates the token, does not forward it, takes the healthy instances of the target service from **Service Discovery** and forwards the request to one of them in round-robin order. The black arrows are these forwarded requests, one per service; each service box shows its port, language and route prefix.
+The source of the diagram is [`docs/architecture.excalidraw`](./docs/architecture.excalidraw): open it on excalidraw.com to edit it, then export it as PNG at 3× over `docs/architecture.png`.
 
-Services never call each other directly. Every service-to-service call goes back out through the Gateway (orange arrows), which forwards it like any other request; each orange label names the target service and what the call is for. The only traffic that bypasses the Gateway is the Discord DMs WebSocket (blue): the Client first gets a URL and a signed 60-second ticket from `POST /ws/negotiate`, then connects to Discord DMs on `:3008` directly.
+The Client reaches the system only through the **API Gateway** (`:3000`, Python, one instance). It sends every REST request with `Authorization: Bearer <token>`; the Gateway validates the token, does not forward it, and passes the caller on as `X-Caller-Type` / `X-Player-Id`. Since Lab 4 it forwards every request to the **Message Broker** with the service token and `X-Timeout-Ms`, and no longer balances, breaks circuits or exposes routes only services call (`404 ROUTE_NOT_FOUND`). The only traffic that bypasses it is the Discord DMs WebSocket (blue): the Client first gets a URL and a signed 60-second ticket from `POST /ws/negotiate`, then connects to Discord DMs on `:3008` directly.
 
-Every service except Discord DMs runs as 2–3 replicas (stacked boxes) behind one service name, and all replicas of a service share its private database (green: MongoDB, blue: PostgreSQL), labelled with the database name and what it stores. Discord DMs runs as one instance, because `:3008` is published to the host and a message sent to one replica would not reach sockets connected to another.
+The **Message Broker** (`:3011` HTTP, `:50011` gRPC, Python, one instance) is in the middle of all traffic between services:
 
-**Service Discovery** (`:3010`, Python, one instance, in-memory registry) is the one REST exception to "everything goes through the Gateway", because the Gateway depends on it. Each instance registers on startup, sends a heartbeat every 10 s, deregisters on shutdown and reports an instance whose circuit breaker tripped; Service Discovery calls every instance's `/status` every 5 s (purple, dashed). The Gateway reads the healthy instances from it and reports tripped instances to it (teal). When an instance changes state or its load becomes critical, Service Discovery alerts the developers (red, dashed).
+- **Requests to a service** (black): the Broker picks the least-loaded healthy instance of the target service from Service Discovery (its reported `load` plus the requests the Broker has open on it), runs the circuit breaker per instance and per service, and reroutes a failed request to another instance when that is safe. Each service box shows its port, route prefix and language.
+- **Service-to-service calls** (orange) are gRPC: a service uses the callee's generated client but connects it to the Broker, which forwards the call to an instance of the callee. Services never call each other directly, and never through the Gateway. Each orange label names the services called.
+- **Topic events** (purple): a service publishes an event to the Broker, which keeps it in a queue per subscribing service and delivers it to one instance of each, retrying with backoff and moving it to the Dead Letter Channel when it cannot be delivered. `session.ended` (Session → Player: the shift XP), `decision.recorded` (Moderation → Discord DMs: the verdict) and `applicant.created` (Applicant → University Record). Delivery is at least once, so every subscriber applies an event once per event id.
+- Every HTTP request and every gRPC call runs on its own thread in the Broker. `GET /topics` and `GET /dead-letters` show the queues, and `GET /metrics` is scraped by **Prometheus**, shown in **Grafana** (orange, dashed).
+
+Every service except Discord DMs runs as 2–3 replicas (stacked boxes) behind one service name, and all replicas of a service share its private database (green: MongoDB, blue: PostgreSQL), labelled with the database name. Discord DMs runs as one instance, because `:3008` is published to the host and a message sent to one replica would not reach sockets connected to another.
+
+**Service Discovery** (`:3010`, Python, one instance, in-memory registry) is the one REST exception to "everything goes through the Gateway", because the Gateway and the Broker depend on it. Each instance registers on startup with its `url`, and since Lab 4 its `grpcUrl` and the `topics` it subscribes to, sends a heartbeat every 10 s and deregisters on shutdown; Service Discovery calls every instance's `/status` every 5 s (purple, dashed). The Broker reads the healthy instances from it and reports instances whose breaker tripped (teal). When an instance changes state or its load becomes critical, Service Discovery alerts the developers (red, dashed).
 
 Only the Gateway (`:3000`) and the Discord DMs WebSocket (`:3008`) are published to the host; everything else stays inside the Docker Compose network.
 
 **Service Relationships**
 
-Every relationship below is a REST call sent through the Gateway, which forwards it to a healthy instance of the target service.
+Every call below goes through the Message Broker: gRPC for a request that needs an answer, a topic event for a notification.
 
-- **Server Moderation Session Service** coordinates a shift. For each applicant it asks Applicant Service to generate the applicant, Credential Service to create or read its credential, Server Rules Service to evaluate the rules and University Record Service for the applicant's records. When the shift ends, it sends the earned XP to Player Service.
-- **Moderation Service** gathers data from Applicant, Credential, Server Rules and University Record to score the Moderator's decision (Accept, Reject, Flag or Ban), and announces the verdict through Discord DMs Service.
-- **Discord DMs Service** checks a session against Server Moderation Session Service before creating its channels and roster.
-- **Applicant Service** reads from University Record Service the record of an applicant it does not hold.
+- **Server Moderation Session Service** coordinates a shift. For each applicant it asks Applicant Service to generate the applicant, Credential Service to create or read its credential, Server Rules Service to evaluate the rules and University Record Service for the applicant's records. When the shift ends, it publishes `session.ended`, and Player Service awards the XP.
+- **Moderation Service** gathers data from Applicant, Credential, Server Rules and University Record to score the Moderator's decision (Accept, Reject, Flag or Ban), and publishes `decision.recorded`, which Discord DMs Service posts as the verdict.
+- **Discord DMs Service** checks a session with Server Moderation Session Service (`GetSession`) before creating its channels and roster.
+- **Applicant Service** reads from University Record Service the record of an applicant it does not hold, and publishes `applicant.created` for every new applicant, which University Record Service subscribes to.
 - **Credential Service** looks up the applicant in Applicant Service.
 - **Server Rules Service** reads from University Record Service the records it needs to evaluate the rules.
-- **Player Service** and **University Record Service** call no other service.
-- Applicant, Credential and University Record Service are meant to create each other's records for a new applicant (mutual initialization, see Data Management Across Microservices); no service does this yet, so the diagram does not show it.
+- **Player Service** calls no other service; it only receives `session.ended`.
 
 ## Tech Stack & Communication Patterns
 
