@@ -15,6 +15,7 @@ Team 18
 - [Microservice Repositories](#microservice-repositories)
 - [Docker Images](#docker-images)
 - [Running the Stack](#running-the-stack)
+- [Monitoring](#monitoring)
 - [Project Board](#project-board)
 
 ## Overview
@@ -1251,6 +1252,47 @@ A replica stopped with `docker stop <container>` deregisters on `SIGTERM` and le
 
 Each database runs `db/<service>/init.*` on first startup and persists its data in a named Docker volume, so data survives `docker compose down`. Use `docker compose down -v` to wipe it.
 
+
+## Monitoring
+
+Lab 4, grade 10. Prometheus scrapes `GET /metrics` on every service; Grafana reads Prometheus.
+
+| Where | Address | Sign-in |
+|---|---|---|
+| Prometheus | `http://localhost:9090` | none |
+| Grafana | `http://localhost:3100` | `GRAFANA_USER` / `GRAFANA_PASSWORD` in `.env` |
+
+Grafana opens on the provisioned **Student ID, Please - stack overview** dashboard. `http://localhost:9090/targets` lists every instance and the result of its last scrape; a service without a `/metrics` endpoint shows there as down.
+
+Configuration lives in `monitoring/`:
+
+```
+monitoring/prometheus.yml                              scrape targets
+monitoring/grafana/provisioning/datasources/           the Prometheus datasource
+monitoring/grafana/provisioning/dashboards/            the dashboard provider
+monitoring/grafana/dashboards/stack-overview.json      the dashboard
+```
+
+Services run with `deploy.replicas` and have no fixed host port, so each scrape job resolves the compose service name over DNS and scrapes every replica it returns. Adding a service means adding a job with its in-network port.
+
+### Series the dashboard reads
+
+Metric names are shared across services so one panel can graph all of them together.
+
+| Series | Type | Labels |
+|---|---|---|
+| `http_requests_total` | counter | `method`, `route`, `status` |
+| `http_request_duration_seconds` | histogram | `method`, `route` |
+| `service_tasks_in_flight`, `service_max_concurrent_tasks` | gauge | — |
+| `service_load_percent`, `service_load_critical` | gauge | — |
+
+`route` is the route pattern, not the path: `GET /moderation/{decisionId}`, never `GET /moderation/decision-1`. A path would create one time series per record.
+
+No series carries a service name. Prometheus adds `job` and `instance` from `monitoring/prometheus.yml`.
+
+`/metrics` is exempt from the concurrency limit, like `/status`. Behind the limit a scrape is answered `503` at full load, which marks the instance down in Prometheus.
+
+Each service may add series of its own. Discord DMs Service exports `service_open_sockets` and `events_received_total{topic,outcome}`; the Message Broker exports `broker_queue_depth{topic}`, `broker_queue_deliveries{state}`, `broker_dead_letters`, `broker_circuit_state{service,state}` and `broker_instances_removed`.
 
 ## Project Board
 

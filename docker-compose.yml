@@ -98,6 +98,43 @@ services:
       service-discovery:
         condition: service_started
 
+  # ==================== Monitoring (Liviu) ====================
+  # Prometheus scrapes GET /metrics on every service; Grafana reads Prometheus.
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    restart: unless-stopped
+    ports:
+      - "${HOST_PROMETHEUS_PORT:-9090}:9090"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=6h
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:9090/-/healthy || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 3000 is the Gateway, so Grafana is published on 3100.
+  grafana:
+    image: grafana/grafana:11.5.1
+    restart: unless-stopped
+    ports:
+      - "${HOST_GRAFANA_PORT:-3100}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_started
+
   # ==================== Player Service (Mihaela) ====================
   player-service:
     image: mihaela5/player-service:4.0.0-rc.1
@@ -565,6 +602,8 @@ services:
       retries: 5
 
 volumes:
+  prometheus_data:
+  grafana_data:
   player_db_data:
   session_db_data:
   applicant_db_data:
