@@ -3,7 +3,7 @@ services:
   # The single entry point. It waits only for Service Discovery: it reads the instance
   # list from it at startup and answers 502 BAD_GATEWAY for a service until it is up.
   gateway:
-    image: mihaela5/gateway:4.0.0-rc.2
+    image: mihaela5/gateway:4.0.0-rc.3
     restart: unless-stopped
     ports:
       - "3000:3000"
@@ -63,7 +63,7 @@ services:
   # published: only the Gateway and the services reach it, with the service token.
   # One thread per request; GET /status stays outside its concurrency limit.
   message-broker:
-    image: mihaela5/message-broker:4.0.0-rc.4
+    image: mihaela5/message-broker:4.0.0-rc.5
     restart: unless-stopped
     environment:
       PORT: 3011
@@ -137,7 +137,7 @@ services:
 
   # ==================== Player Service (Mihaela) ====================
   player-service:
-    image: mihaela5/player-service:4.0.0-rc.1
+    image: mihaela5/player-service:4.0.0-rc.2
     restart: unless-stopped
     # Lab 3, grade 5: two instances. Each registers its own container hostname with
     # Service Discovery, so there is no fixed host port and no container_name.
@@ -199,7 +199,7 @@ services:
 
   # ==================== Server Moderation Session Service (Mihaela) ====================
   session-service:
-    image: mihaela5/session-service:4.0.0-rc.2
+    image: mihaela5/session-service:4.0.0-rc.3
     restart: unless-stopped
     # Lab 3, grade 5: two instances; sessions live in session-db, so any instance can
     # serve any session.
