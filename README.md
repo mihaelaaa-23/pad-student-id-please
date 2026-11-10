@@ -359,7 +359,7 @@ The messaging layer between the Gateway and the services, and between the servic
 | GET | /metrics | — | Prometheus text format |
 | GET | /status | — | `{service: "message-broker", status: string, time: string, load: load}` |
 
-`deadLetter` is `{id: string, eventId: string, topic: string, subscriber: string, source: string, requestId: string, payload: object, reason: string, attempts: int, lastError: string, firstAttemptAt: string, deadAt: string}`.
+`deadLetter` is `{id: string, eventId: string, topic: string, subscriber: string, source: string, requestId: string, payload: JSON value or {contentType: string, base64: string} for non-JSON content, reason: string, attempts: int, lastError: string, firstAttemptAt: string, deadAt: string}`.
 
 Notes for callers:
 
