@@ -478,7 +478,7 @@ services:
 
   # ==================== Moderation Service (Liviu) ====================
   moderation-service:
-    image: d3adeye/moderation-service:4.0.0-rc.2
+    image: d3adeye/moderation-service:4.0.0-rc.3
     restart: unless-stopped
     # Lab 3, grade 5: two instances. Each registers its own container hostname with
     # Service Discovery, so there is no fixed host port and no container_name. The
@@ -510,10 +510,18 @@ services:
       # service has none of its own.
       SERVICE_DISCOVERY_URL: http://service-discovery:3010
       SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
-      # Lab 4, grade 8: every call to another service goes to the Broker over gRPC.
-      # The four URLs above stay set: an empty one means that dependency does not
-      # exist and the decision answers 503 DEPENDENCY_UNAVAILABLE.
+      # Lab 4, grade 6: decision.recorded is published to the Broker over gRPC,
+      # and Discord DMs announces it in chat.
       BROKER_GRPC_URL: message-broker:50011
+      # Lab 4, grade 8: which dependencies are called over gRPC instead of REST.
+      # Empty until Applicant, Credential, Server Rules and University Record run
+      # images that serve gRPC: the Broker answers a call for a service with no
+      # gRPC instance with Unavailable, and that fails the decision. Add each name
+      # here as its image lands, comma-separated.
+      # The four URLs above stay set either way: an empty one means that
+      # dependency does not exist and the decision answers 503
+      # DEPENDENCY_UNAVAILABLE.
+      GRPC_DEPENDENCIES: ""
       # Lab 3, grade 3: DEBUG, INFO, WARN or ERROR.
       LOG_LEVEL: ${MODERATION_LOG_LEVEL:-INFO}
       DB_HOST: moderation-db
