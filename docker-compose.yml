@@ -269,7 +269,7 @@ services:
 
   # ==================== Applicant Service (Ciprian) ====================
   applicant-service:
-    image: ciprik13/applicant-service:4.0.0-rc.1
+    image: ciprik13/applicant-service:4.0.0-rc.2
     restart: unless-stopped
     # Lab 3, grade 5: two instances, sharing applicant-db (STORE_DRIVER mongo).
     deploy:
@@ -309,6 +309,11 @@ services:
       # Lab 4, grade 8: serves applicant.v1.ApplicantService (GetApplicant,
       # GenerateApplicant) on 50003, registered with Service Discovery as its grpcUrl.
       GRPC_PORT: 50003
+      # Lab 4, grade 6: publishes applicant.created to the Broker.
+      BROKER_GRPC_URL: message-broker:50011
+      # Lab 4, grade 8: University Record is still called over REST until it serves gRPC;
+      # then add university-record-service here.
+      GRPC_DEPENDENCIES: ""
     depends_on:
       applicant-db:
         condition: service_healthy
@@ -333,7 +338,7 @@ services:
 
   # ==================== Credential Service (Ciprian) ====================
   credential-service:
-    image: ciprik13/credential-service:4.0.0-rc.1
+    image: ciprik13/credential-service:4.0.0-rc.2
     restart: unless-stopped
     # Lab 3, grade 5: two instances, sharing credential-db (STORE_DRIVER mongo).
     deploy:
@@ -375,6 +380,8 @@ services:
       # Lab 4, grade 8: serves credential.v1.CredentialService (IssueCredential,
       # GetCredential, ValidateCredential) on 50004, registered as its grpcUrl.
       GRPC_PORT: 50004
+      # Lab 4, grade 8: Applicant is called over gRPC (GetApplicant) through the Broker.
+      BROKER_GRPC_URL: message-broker:50011
     depends_on:
       credential-db:
         condition: service_healthy
