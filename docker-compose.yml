@@ -199,7 +199,7 @@ services:
 
   # ==================== Server Moderation Session Service (Mihaela) ====================
   session-service:
-    image: mihaela5/session-service:4.0.0-rc.3
+    image: mihaela5/session-service:4.0.0-rc.4
     restart: unless-stopped
     # Lab 3, grade 5: two instances; sessions live in session-db, so any instance can
     # serve any session.
@@ -243,6 +243,10 @@ services:
       # instead of a PATCH /players/{id}/xp per participant; Player subscribes to it.
       BROKER_GRPC_URL: message-broker:50011
       PUBLISH_TIMEOUT_MS: ${SESSION_PUBLISH_TIMEOUT_MS:-1500}
+      # Lab 4, grade 8: Applicant (GenerateApplicant) and Credential (IssueCredential,
+      # GetCredential) are called over gRPC through the Broker; Server Rules and University
+      # Record stay on REST through the Broker until they serve gRPC.
+      GRPC_DEPENDENCIES: applicant-service,credential-service
     depends_on:
       session-db:
         condition: service_healthy
