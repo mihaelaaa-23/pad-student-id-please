@@ -33,7 +33,10 @@
           "pm.test('the Gateway echoes the request id', function () {",
           "  pm.expect(pm.response.headers.get('X-Request-Id')).to.eql(sentId);",
           "});",
-          "if (pm.response.code < 500) {",
+          "// A route the Gateway does not expose (Lab 4, grade 8) is answered by the Gateway itself,",
+          "// so no instance is named.",
+          "const refused = pm.response.code === 404 && (pm.response.json().error || {}).code === 'ROUTE_NOT_FOUND';",
+          "if (pm.response.code < 500 && !refused) {",
           "  pm.test('the answering instance is named in X-Instance-Id', function () {",
           "    pm.expect(instanceId, 'X-Instance-Id').to.be.a('string').and.not.empty;",
           "  });",
@@ -206,26 +209,21 @@
       }
     },
     {
-      "name": "Generate Applicant (seeded)",
+      "name": "Generate Applicant - Internal Route",
       "event": [
         {
           "listen": "test",
           "script": {
             "type": "text/javascript",
             "exec": [
-              "const json = pm.response.json();",
-              "pm.test('status is 201', function () { pm.response.to.have.status(201); });",
-              "pm.test('returns the contract shape', function () {",
-              "  pm.expect(json).to.have.all.keys('applicantId', 'name', 'studentId', 'major', 'year', 'role', 'status');",
+              "// Lab 4, grade 8: only Session calls this, through the Message Broker over gRPC,",
+              "// so the Gateway answers it itself without forwarding it.",
+              "pm.test('status is 404', function () { pm.response.to.have.status(404); });",
+              "pm.test('the Gateway refuses it as an internal route', function () {",
+              "  pm.expect(pm.response.json().error.code).to.eql('ROUTE_NOT_FOUND');",
               "});",
-              "pm.test('does not expose ground truth', function () {",
-              "  pm.expect(json).to.not.have.property('scenario');",
-              "});",
-              "pm.test('seeded generation is reproducible', function () {",
-              "  pm.expect(json.name).to.eql('Dorin Chirtoaca');",
-              "});",
-              "pm.test('studentId follows the agreed format', function () {",
-              "  pm.expect(json.studentId).to.match(/^FCIM-(X)?\\d{5,6}$/);",
+              "pm.test('no instance answered', function () {",
+              "  pm.expect(pm.response.headers.get('X-Instance-Id')).to.be.undefined;",
               "});"
             ]
           }

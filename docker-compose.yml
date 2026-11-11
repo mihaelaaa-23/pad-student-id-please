@@ -3,7 +3,7 @@ services:
   # The single entry point. It waits only for Service Discovery: it reads the instance
   # list from it at startup and answers 502 BAD_GATEWAY for a service until it is up.
   gateway:
-    image: mihaela5/gateway:4.0.0-rc.3
+    image: mihaela5/gateway:4.0.0-rc.4
     restart: unless-stopped
     ports:
       - "3000:3000"
