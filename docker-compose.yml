@@ -531,14 +531,15 @@ services:
       # and Discord DMs announces it in chat.
       BROKER_GRPC_URL: message-broker:50011
       # Lab 4, grade 8: which dependencies are called over gRPC instead of REST.
-      # Empty until Applicant, Credential, Server Rules and University Record run
-      # images that serve gRPC: the Broker answers a call for a service with no
-      # gRPC instance with Unavailable, and that fails the decision. Add each name
-      # here as its image lands, comma-separated.
+      # Applicant and Credential serve gRPC since 4.0.0-rc.2 (#185), so GetApplicant
+      # and GetCredential go through the Broker over gRPC. Server Rules and
+      # University Record stay REST until their images serve gRPC: the Broker answers
+      # a call for a service with no gRPC instance with Unavailable, and that fails
+      # the decision. Add each name here as its image lands, comma-separated.
       # The four URLs above stay set either way: an empty one means that
       # dependency does not exist and the decision answers 503
       # DEPENDENCY_UNAVAILABLE.
-      GRPC_DEPENDENCIES: ""
+      GRPC_DEPENDENCIES: "applicant-service,credential-service"
       # Lab 3, grade 3: DEBUG, INFO, WARN or ERROR.
       LOG_LEVEL: ${MODERATION_LOG_LEVEL:-INFO}
       DB_HOST: moderation-db
