@@ -63,7 +63,7 @@ services:
   # published: only the Gateway and the services reach it, with the service token.
   # One thread per request; GET /status stays outside its concurrency limit.
   message-broker:
-    image: mihaela5/message-broker:4.0.0-rc.5
+    image: mihaela5/message-broker:4.0.0-rc.6
     restart: unless-stopped
     environment:
       PORT: 3011
@@ -93,6 +93,14 @@ services:
       UPSTREAM_TIMEOUT_MS: ${MESSAGE_BROKER_UPSTREAM_TIMEOUT_MS:-10000}
       # Same reasoning as the Gateway's 500: one client request holds a slot per hop.
       MAX_CONCURRENT_TASKS: ${MESSAGE_BROKER_MAX_CONCURRENT_TASKS:-500}
+      # Lab 4, grade 9: the queue, the Dead Letter Channel and the subscriptions live in one
+      # SQLite file on the broker_data volume, so an accepted event survives a restart.
+      QUEUE_STORE: sqlite
+      BROKER_DB_PATH: /data/broker.db
+      # Attempts of one delivery before it moves to the Dead Letter Channel (max_attempts).
+      MAX_DELIVERY_ATTEMPTS: ${MESSAGE_BROKER_MAX_DELIVERY_ATTEMPTS:-5}
+    volumes:
+      - broker_data:/data
     # service_started, like the Gateway: without Service Discovery it uses the fixed URLs.
     depends_on:
       service-discovery:
@@ -642,6 +650,7 @@ services:
       retries: 5
 
 volumes:
+  broker_data:
   prometheus_data:
   grafana_data:
   player_db_data:
