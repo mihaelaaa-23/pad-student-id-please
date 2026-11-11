@@ -269,7 +269,7 @@ services:
 
   # ==================== Applicant Service (Ciprian) ====================
   applicant-service:
-    image: ciprik13/applicant-service:3.0.0
+    image: ciprik13/applicant-service:4.0.0-rc.1
     restart: unless-stopped
     # Lab 3, grade 5: two instances, sharing applicant-db (STORE_DRIVER mongo).
     deploy:
@@ -302,10 +302,13 @@ services:
       # Gateway lets this service's own requests through.
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
       ENABLE_TEST_HOOKS: ${ENABLE_TEST_HOOKS:-false}
-      # Lab 3: register with Service Discovery; circuit breaker on University Record.
+      # Lab 3: register with Service Discovery. Since Lab 4 the circuit breaker on
+      # University Record is the Broker's, so this service has none of its own.
       SERVICE_DISCOVERY_URL: http://service-discovery:3010
       SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
-      BREAKER_MODE: ${BREAKER_MODE:-remove}
+      # Lab 4, grade 8: serves applicant.v1.ApplicantService (GetApplicant,
+      # GenerateApplicant) on 50003, registered with Service Discovery as its grpcUrl.
+      GRPC_PORT: 50003
     depends_on:
       applicant-db:
         condition: service_healthy
@@ -330,7 +333,7 @@ services:
 
   # ==================== Credential Service (Ciprian) ====================
   credential-service:
-    image: ciprik13/credential-service:3.0.0
+    image: ciprik13/credential-service:4.0.0-rc.1
     restart: unless-stopped
     # Lab 3, grade 5: two instances, sharing credential-db (STORE_DRIVER mongo).
     deploy:
@@ -365,10 +368,13 @@ services:
       # Gateway lets this service's own requests through.
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
       ENABLE_TEST_HOOKS: ${ENABLE_TEST_HOOKS:-false}
-      # Lab 3: register with Service Discovery; circuit breaker on Applicant.
+      # Lab 3: register with Service Discovery. Since Lab 4 the circuit breaker on
+      # Applicant is the Broker's, so this service has none of its own.
       SERVICE_DISCOVERY_URL: http://service-discovery:3010
       SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
-      BREAKER_MODE: ${BREAKER_MODE:-remove}
+      # Lab 4, grade 8: serves credential.v1.CredentialService (IssueCredential,
+      # GetCredential, ValidateCredential) on 50004, registered as its grpcUrl.
+      GRPC_PORT: 50004
     depends_on:
       credential-db:
         condition: service_healthy
