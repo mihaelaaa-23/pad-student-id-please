@@ -3,6 +3,13 @@
 # Every service answers GET /metrics in the exposition format. Services run
 # with deploy.replicas, so each job resolves the compose service name over DNS
 # and scrapes every replica it returns.
+#
+# Service Discovery is deliberately not a job here. It is the registry the
+# services and the Broker read, not a service that serves the game, and it has
+# no /metrics endpoint: scraping it only added a permanently red target, which
+# reads as an outage it is not. Its health is already visible, in that an
+# instance missing from GET /services stops being routed to at all. Add a job
+# for it when it exports /metrics.
 
 global:
   scrape_interval: 10s
@@ -14,12 +21,6 @@ scrape_configs:
       - names: [gateway]
         type: A
         port: 3000
-
-  - job_name: service-discovery
-    dns_sd_configs:
-      - names: [service-discovery]
-        type: A
-        port: 3010
 
   - job_name: message-broker
     dns_sd_configs:

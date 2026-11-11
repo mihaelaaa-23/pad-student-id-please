@@ -1275,6 +1275,8 @@ monitoring/grafana/dashboards/stack-overview.json      the dashboard
 
 Services run with `deploy.replicas` and have no fixed host port, so each scrape job resolves the compose service name over DNS and scrapes every replica it returns. Adding a service means adding a job with its in-network port.
 
+Service Discovery is not scraped. It is the registry the services and the Broker read rather than a service that serves the game, and it exports no `/metrics`, so a job for it only showed a permanently red target. An instance it drops stops being routed to, which is where its effect is already visible.
+
 ### Series the dashboard reads
 
 Metric names are shared across services so one panel can graph all of them together.
