@@ -399,6 +399,8 @@ services:
       replicas: ${RULES_REPLICAS:-2}
     environment:
       PORT: 3005
+      GRPC_PORT: 50005
+      GRPC_HOST: 0.0.0.0
       DB_HOST: rules-db
       DB_PORT: 27017
       DB_USER: ${RULES_DB_USER}
@@ -443,6 +445,8 @@ services:
       replicas: ${UNIVERSITY_RECORD_REPLICAS:-2}
     environment:
       PORT: 3006
+      GRPC_PORT: 50006
+      GRPC_HOST: 0.0.0.0
       DB_HOST: university-record-db
       DB_PORT: 5432
       DB_USER: ${UNIVERSITY_RECORD_DB_USER}
