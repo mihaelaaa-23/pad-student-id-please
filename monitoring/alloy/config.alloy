@@ -18,6 +18,14 @@ discovery.relabel "compose" {
     action        = "keep"
   }
 
+  // Not Loki's or Alloy's own output: Loki logs every push it receives, so shipping it
+  // back to Loki would feed on itself and drown the services' lines.
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    regex         = "loki|alloy"
+    action        = "drop"
+  }
+
   // `service` is the compose service name, so both replicas of a service share it;
   // `container` tells them apart.
   rule {
