@@ -16,6 +16,7 @@ Team 18
 - [Docker Images](#docker-images)
 - [Running the Stack](#running-the-stack)
 - [Monitoring](#monitoring)
+- [Log Collection](#log-collection)
 - [Project Board](#project-board)
 
 ## Overview
@@ -731,7 +732,7 @@ How the services talk to each other through the Message Broker: request/response
 - **Gateway → Broker:** HTTP, with the Gateway's own `/{prefix}/{service path}` shape (above). gRPC is required only between services, and the Gateway forwards arbitrary client REST.
 - **Durable store:** one SQLite file in WAL mode on the named volume `broker_data`. Enqueueing and acknowledging are transactions, and the file can be inspected live with `sqlite3`.
 - **Circuit breakers in the services:** removed once a service calls its dependencies through the Broker (grade 5). The Broker sees every caller's traffic to an instance, while two breakers in a row would count the same failures twice. The services keep their per-call timeout, sent as `X-Timeout-Ms` and later as the gRPC deadline, and their `502`/`503` handling. Reports to Service Discovery now come only from the Broker (`reporter: "message-broker"`).
-- **Logs for the download endpoint (grade 4):** the services keep writing the Logging Convention's JSON lines to stdout; how they are collected is decided with the log endpoint.
+- **Logs for the download endpoint (grade 4):** the services keep writing the Logging Convention's JSON lines to stdout. Grafana Alloy reads the stdout of every compose container through the Docker API (socket mounted read-only into Alloy only) and pushes it to Loki, labelled `service` with the compose service name, kept 24 h. The Gateway's `GET /logs/download` queries Loki's HTTP API and returns the lines as NDJSON, for the service token only (see Log Collection). No service changed, and the Gateway never touches the Docker socket. Alloy rather than Promtail: Promtail is deprecated in favour of Alloy and no longer gets releases.
 
 ### Circuit Breaker
 
@@ -1186,7 +1187,7 @@ Each service is pushed to Docker Hub as a versioned, public image — no Dockerf
 
 | Service | Docker Hub Image | Port | Run Requirements |
 |---|---|---|---|
-| Gateway | [`mihaela5/gateway:4.0.0-rc.4`](https://hub.docker.com/r/mihaela5/gateway) | 3000 | none required; optionally `PORT` (`3000` by default), `LOG_LEVEL` (`INFO`), `MESSAGE_BROKER_URL` (Lab 4; set, every request goes to the Message Broker at `<url>/<prefix>` with the service token, and the Broker picks the instance and runs the circuit breaker; unset, every service is reached at its fixed URL below, without balancing or a breaker), `SERVICE_DISCOVERY_URL`, `SD_HEARTBEAT_MS` (`10000`) and `ADVERTISE_URL` (Lab 3: the Gateway registers itself; it no longer reads the instance list), `PLAYER_SERVICE_URL`, `SESSION_SERVICE_URL`, `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL`, `MODERATION_SERVICE_URL`, `DISCORD_DMS_SERVICE_URL` (fixed URLs, used only without `MESSAGE_BROKER_URL`), `UPSTREAM_TIMEOUT_MS` (`10000` by default, sent to the Broker as `X-Timeout-Ms`), `MAX_CONCURRENT_TASKS` (`500` by default; Lab 2, grade 8: beyond it `503 CONCURRENCY_LIMIT_REACHED` with `Retry-After: 1`), `JWT_SECRET` and `SERVICE_TOKEN` (Lab 2, grade 10: both required in compose, so authorization is on; `SERVICE_TOKEN` also authenticates the Gateway to the Broker), `WS_TICKET_SECRET` and `DISCORD_DMS_WS_PUBLIC_URL` (WebSocket negotiation; without the secret `POST /ws/negotiate` answers `503 WS_NEGOTIATION_DISABLED`). Lab 4, grade 8: routes only services call are not exposed (`404 ROUTE_NOT_FOUND`, see the Gateway notes). No database |
+| Gateway | [`mihaela5/gateway:4.0.0-rc.4`](https://hub.docker.com/r/mihaela5/gateway) | 3000 | none required; optionally `PORT` (`3000` by default), `LOG_LEVEL` (`INFO`), `MESSAGE_BROKER_URL` (Lab 4; set, every request goes to the Message Broker at `<url>/<prefix>` with the service token, and the Broker picks the instance and runs the circuit breaker; unset, every service is reached at its fixed URL below, without balancing or a breaker), `SERVICE_DISCOVERY_URL`, `SD_HEARTBEAT_MS` (`10000`) and `ADVERTISE_URL` (Lab 3: the Gateway registers itself; it no longer reads the instance list), `PLAYER_SERVICE_URL`, `SESSION_SERVICE_URL`, `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL`, `MODERATION_SERVICE_URL`, `DISCORD_DMS_SERVICE_URL` (fixed URLs, used only without `MESSAGE_BROKER_URL`), `UPSTREAM_TIMEOUT_MS` (`10000` by default, sent to the Broker as `X-Timeout-Ms`), `MAX_CONCURRENT_TASKS` (`500` by default; Lab 2, grade 8: beyond it `503 CONCURRENCY_LIMIT_REACHED` with `Retry-After: 1`), `JWT_SECRET` and `SERVICE_TOKEN` (Lab 2, grade 10: both required in compose, so authorization is on; `SERVICE_TOKEN` also authenticates the Gateway to the Broker), `WS_TICKET_SECRET` and `DISCORD_DMS_WS_PUBLIC_URL` (WebSocket negotiation; without the secret `POST /ws/negotiate` answers `503 WS_NEGOTIATION_DISABLED`). Lab 4, grade 8: routes only services call are not exposed (`404 ROUTE_NOT_FOUND`, see the Gateway notes). Lab 4, grade 4: `LOKI_URL` (`http://loki:3100`) for `GET /logs/download`, service token only (see Log Collection). No database |
 | Player Service | [`mihaela5/player-service:4.0.0-rc.2`](https://hub.docker.com/r/mihaela5/player-service) | 3001, not published — reached through the Gateway at `/player` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `JWT_SECRET` (signs the login token, at least 32 characters; the service does not start without it); optionally `JWT_TTL_SECONDS` (`86400`), `TASK_TIMEOUT_MS` (`2000`) and `MAX_CONCURRENT_TASKS` (`50`) (Lab 2, grade 8), `LOAD_CRITICAL_PERCENT` (`80` by default; Lab 3, grade 8: `/status` reports `load.critical` from that share of `MAX_CONCURRENT_TASKS` in flight), and `REQUIRE_CALLER_HEADERS` (`false` by default, `true` in compose; Lab 2, grade 10: `true` answers `401 UNAUTHORIZED` on a protected route called without the Gateway's caller headers; set only together with the Gateway's authorization); `LOG_LEVEL` (`INFO`); `SERVICE_DISCOVERY_URL`, `SERVICE_TOKEN`, `SD_HEARTBEAT_MS` (`10000`) and `ADVERTISE_URL` (Lab 3: with the URL set, each instance registers on startup, sends heartbeats and deregisters on shutdown; unset, it does not register); `GRPC_PORT` (Lab 4: `50001` in compose; serves `events.v1.EventSink/Deliver`, registered as `grpcUrl`) and `SD_TOPICS` (`session.ended` in compose; the topics sent with the registration, only with `GRPC_PORT`) |
 | Server Moderation Session Service | [`mihaela5/session-service:4.0.0-rc.4`](https://hub.docker.com/r/mihaela5/session-service) | 3002, not published — reached through the Gateway at `/session` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `BROKER_GRPC_URL` (Lab 4, grade 6: `message-broker:50011` in compose; set, the shift XP is published as one `session.ended` event on `end`) and `PUBLISH_TIMEOUT_MS` (`1500`; two attempts at most), `GRPC_DEPENDENCIES` (Lab 4, grade 8: `applicant-service,credential-service` in compose; those two are called over gRPC through `BROKER_GRPC_URL`, the others over REST through their `*_SERVICE_URL`; any other name stops the service at start), `GRPC_PORT` (Lab 4, grade 8: `50002` in compose; serves `GetSession` and registers it as `grpcUrl`), `PLAYER_SERVICE_URL` (shift XP is sent there on `end` while `BROKER_GRPC_URL` is unset), `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` (in compose, each points at the Message Broker, e.g. `http://message-broker:3011/applicant`) — if unset, the requests that need that dependency answer `503 DEPENDENCY_UNAVAILABLE`; `HTTP_TIMEOUT_MS` (`4500`), `TASK_TIMEOUT_MS` (`8000`) and `MAX_CONCURRENT_TASKS` (`50`) (Lab 2, grade 8, from the timeout budget); `LOAD_CRITICAL_PERCENT` (`80` by default; Lab 3, grade 8: `/status` reports `load.critical` from that share of `MAX_CONCURRENT_TASKS` in flight); `SERVICE_TOKEN` (Lab 2, grade 10: sent as `Authorization: Bearer <token>` on every outgoing call when set, never logged; empty by default; Lab 3: also authenticates the instance with Service Discovery); `LOG_LEVEL` (`INFO`); `SERVICE_DISCOVERY_URL`, `SD_HEARTBEAT_MS` (`10000`) and `ADVERTISE_URL`, as for Player Service |
 | Applicant Service | [`ciprik13/applicant-service:4.0.0-rc.2`](https://hub.docker.com/r/ciprik13/applicant-service) | 3003, not published — reached through the Gateway at `/applicant` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `STORE_DRIVER` (`mongo` by default; `memory` runs without a database, for a single instance only, since replicas would not share it), `DECEPTIVE_RATE` (share of deceptive applicants, `0.35` by default), `UNIVERSITY_RECORD_SERVICE_URL` (in compose, the Message Broker prefix `http://message-broker:3011/university-record`; if unset, the requests that need University Record answer `503 DEPENDENCY_UNAVAILABLE`), `HTTP_TIMEOUT_MS` (`2000` by default), `TASK_TIMEOUT_MS` (`3000` by default; a request still running after it gets `504 TASK_TIMEOUT`), `MAX_CONCURRENT_TASKS` (`50` by default; beyond it `503 CONCURRENCY_LIMIT_REACHED` with `Retry-After: 1`), `LOAD_CRITICAL_PERCENT` (`80` by default; Lab 3, grade 8: `/status` reports `load.critical` from that share of `MAX_CONCURRENT_TASKS` in flight), `SERVICE_TOKEN` (Lab 2, grade 10: sent as `Authorization: Bearer <token>` on every outgoing call when set, never logged; Lab 3: also authenticates the instance with Service Discovery), `ENABLE_TEST_HOOKS` (`false`; demo only, enables `?simulateDelayMs=`); `LOG_LEVEL` (`INFO`); `SERVICE_DISCOVERY_URL`, `SD_HEARTBEAT_MS` (`10000`) and `ADVERTISE_URL`, as for Player Service; `GRPC_PORT` (Lab 4, grade 8: `50003` in compose; serves `GetApplicant` and `GenerateApplicant` and registers it as `grpcUrl`; unset, REST only); `BROKER_GRPC_URL` (`message-broker:50011`: publishes `applicant.created`); `GRPC_DEPENDENCIES` (empty; `university-record-service` once it serves gRPC, then GetRecord goes over gRPC). `GET /metrics` for Prometheus. Since Lab 4 no circuit breaker of its own: the Broker's |
@@ -1268,7 +1269,9 @@ Configuration lives in `monitoring/`:
 
 ```
 monitoring/prometheus.yml                              scrape targets
-monitoring/grafana/provisioning/datasources/           the Prometheus datasource
+monitoring/grafana/provisioning/datasources/           the Prometheus and Loki datasources
+monitoring/loki/loki.yml                               Loki: storage and 24 h retention (Log Collection)
+monitoring/alloy/config.alloy                          Alloy: container stdout to Loki (Log Collection)
 monitoring/grafana/provisioning/dashboards/            the dashboard provider
 monitoring/grafana/dashboards/stack-overview.json      the dashboard
 ```
@@ -1293,6 +1296,33 @@ No series carries a service name. Prometheus adds `job` and `instance` from `mon
 `/metrics` is exempt from the concurrency limit, like `/status`. Behind the limit a scrape is answered `503` at full load, which marks the instance down in Prometheus.
 
 Each service may add series of its own. Discord DMs Service exports `service_open_sockets` and `events_received_total{topic,outcome}`; the Message Broker exports `broker_queue_depth{topic}`, `broker_queue_deliveries{state}`, `broker_dead_letters`, `broker_circuit_state{service,state}` and `broker_instances_removed`.
+
+## Log Collection
+
+Lab 4, grade 4. The logs of the whole system, downloadable from one endpoint.
+
+```
+container stdout ──(Docker API)──> Alloy ──push──> Loki (24 h) <──query── Gateway GET /logs/download
+                                                       ^
+                                                       └──────────────── Grafana (Explore -> Loki)
+```
+
+- **Collection.** Every service writes the Logging Convention's JSON lines to stdout, as before. Grafana Alloy (`monitoring/alloy/config.alloy`) lists the compose containers through the Docker API, reads their stdout and pushes it to Loki with the label `service` (the compose service name, so both replicas share it) and `container`. The Docker socket is mounted read-only into Alloy and nowhere else. Reading through the API, not `/var/lib/docker/containers`, also works on Docker Desktop.
+- **Storage.** Loki (`monitoring/loki/loki.yml`), one process, filesystem storage on the named volume `loki_data`, 24 h retention applied by its compactor. Not published to the host.
+- **Download.** `GET /logs/download` on the Gateway, service token only (a player token gets `403`: the lines carry other players' ids). Optional filters `service`, `level`, `requestId`, `from`, `to` (ISO 8601; default the last 15 minutes, at most 24 h apart) and `limit` (1–5000, default 5000). Every value is validated before it goes into the LogQL query. The answer is `application/x-ndjson` as an attachment, oldest first, each line as the service wrote it; a line that is not a JSON object (a database's own log) is wrapped as `{"timestamp", "service", "raw"}`. `X-Log-Lines` and `X-Log-Truncated` describe it. Loki unreachable: `503 DEPENDENCY_UNAVAILABLE`.
+- **Grafana.** Loki is provisioned as a second data source; Explore -> Loki, e.g. `{service="applicant-service"} | json | level="ERROR"`.
+
+```bash
+curl -s -H "Authorization: Bearer $SERVICE_TOKEN" -OJ "http://localhost:3000/logs/download?requestId=<id>"
+```
+
+The `requestId` filter follows one request through every service it touched: the Gateway, the Broker and each service log it on every line.
+
+`postman/gateway.postman_collection.json` checks it end to end: one traced request, then its lines from more than one service, a service and level filter, a player token refused (`403`), no token (`401`) and invalid filters (`422`). It needs the service token:
+
+```bash
+npx newman run postman/gateway.postman_collection.json --env-var serviceToken=$SERVICE_TOKEN
+```
 
 ## Project Board
 

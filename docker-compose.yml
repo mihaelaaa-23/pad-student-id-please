@@ -34,6 +34,8 @@ services:
       # The address the *client* connects to. The in-network name above means
       # nothing outside this network, and this URL is handed to the client.
       DISCORD_DMS_WS_PUBLIC_URL: ws://localhost:3008
+      # Lab 4, grade 4: GET /logs/download reads the logs of every container from Loki.
+      LOKI_URL: http://loki:3100
     # service_started, not service_healthy: with no list from Service Discovery the Gateway
     # routes to the fixed upstreams above, so Service Discovery failing to start does not
     # take down the only entry point.
@@ -141,6 +143,37 @@ services:
       - grafana_data:/var/lib/grafana
     depends_on:
       prometheus:
+        condition: service_started
+      loki:
+        condition: service_started
+
+  # Lab 4, grade 4: the logs of every container, kept 24 h (monitoring/loki/loki.yml).
+  # Read by the Gateway's GET /logs/download and by Grafana; not published to the host.
+  loki:
+    image: grafana/loki:3.5.0
+    restart: unless-stopped
+    command: -config.file=/etc/loki/loki.yml
+    volumes:
+      - ./monitoring/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki_data:/loki
+
+  # Lab 4, grade 4: ships the stdout of every compose container to Loki, labelled with
+  # the compose service name (monitoring/alloy/config.alloy). The Docker socket is
+  # mounted read-only here and nowhere else; no service changes how it logs.
+  alloy:
+    image: grafana/alloy:v1.9.0
+    restart: unless-stopped
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./monitoring/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy_data:/var/lib/alloy/data
+    depends_on:
+      loki:
         condition: service_started
 
   # ==================== Player Service (Mihaela) ====================
@@ -651,7 +684,9 @@ services:
       retries: 5
 
 volumes:
+  alloy_data:
   broker_data:
+  loki_data:
   prometheus_data:
   grafana_data:
   player_db_data:
