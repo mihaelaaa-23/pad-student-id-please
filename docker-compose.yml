@@ -358,7 +358,7 @@ services:
       BROKER_GRPC_URL: message-broker:50011
       # Lab 4, grade 8: University Record is still called over REST until it serves gRPC;
       # then add university-record-service here.
-      GRPC_DEPENDENCIES: ""
+      GRPC_DEPENDENCIES: "server-rules-service,university-record-service"
     depends_on:
       applicant-db:
         condition: service_healthy
@@ -451,12 +451,14 @@ services:
 
   # ==================== Server Rules Service (Ion) ====================
   server-rules-service:
-    image: ion190/server-rules-service:3.0.0
+    image: ion190/server-rules-service:4.0.0-rc.1
     restart: unless-stopped
     deploy:
       replicas: ${RULES_REPLICAS:-2}
     environment:
       PORT: 3005
+      GRPC_PORT: 50005
+      GRPC_HOST: 0.0.0.0
       DB_HOST: rules-db
       DB_PORT: 27017
       DB_USER: ${RULES_DB_USER}
@@ -495,12 +497,14 @@ services:
 
   # ==================== University Record Service (Ion) ====================
   university-record-service:
-    image: ion190/university-record-service:3.0.0
+    image: ion190/university-record-service:4.0.0-rc.1
     restart: unless-stopped
     deploy:
       replicas: ${UNIVERSITY_RECORD_REPLICAS:-2}
     environment:
       PORT: 3006
+      GRPC_PORT: 50006
+      GRPC_HOST: 0.0.0.0
       DB_HOST: university-record-db
       DB_PORT: 5432
       DB_USER: ${UNIVERSITY_RECORD_DB_USER}
