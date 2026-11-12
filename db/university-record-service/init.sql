@@ -3,7 +3,8 @@ CREATE TABLE IF NOT EXISTS university_records (
     applicant_id VARCHAR(100) NOT NULL UNIQUE,
     name VARCHAR(255) NOT NULL,
     student_id VARCHAR(100) NOT NULL,
-    university VARCHAR(255) NOT NULL,
+    university VARCHAR(255),
+    created_from_event BOOLEAN NOT NULL DEFAULT FALSE,
     faculty VARCHAR(255),
     program VARCHAR(255),
     study_year INTEGER,
@@ -67,3 +68,8 @@ VALUES
     8.70
 )
 ON CONFLICT (applicant_id) DO NOTHING;
+CREATE TABLE IF NOT EXISTS processed_events (
+    event_id VARCHAR(255) PRIMARY KEY,
+    topic VARCHAR(100) NOT NULL,
+    processed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
