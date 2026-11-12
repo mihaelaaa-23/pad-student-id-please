@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+// Applicant Service RPCs called by other services (Lab 4, Grade 8).
+// Mirrors the REST contract; field names map to the camelCase JSON names.
+package applicant.v1;
+
+option go_package = "github.com/mihaelaaa-23/pad-student-id-please/proto/gen/go/applicant/v1;applicantv1";
+
+// The identity fields shared by Applicant, Credential and University Record.
+message ApplicantCore {
+  string name = 1;
+  string student_id = 2;
+  string major = 3;
+  // Unset for non-students (REST: year: null).
+  optional int32 year = 4;
+  // See "Shared Enumerations": student_faf | student_other | teaching_assistant | staff | alumnus | outsider.
+  string role = 5;
+  // University status, see "Shared Enumerations".
+  string status = 6;
+}
+
+// Same flat shape as the REST response, so a controller returns one object for both.
+message Applicant {
+  string applicant_id = 1;
+  string name = 2;
+  string student_id = 3;
+  string major = 4;
+  optional int32 year = 5;
+  string role = 6;
+  string status = 7;
+}
+
+message GenerateApplicantRequest {}
+
+message GetApplicantRequest {
+  string applicant_id = 1;
+}
+
+service ApplicantService {
+  // Session Service: a new applicant for process-applicant. REST: POST /applicants/generate.
+  rpc GenerateApplicant(GenerateApplicantRequest) returns (Applicant);
+  // Credential, Moderation: NOT_FOUND when unknown. REST: GET /applicants/{id}.
+  rpc GetApplicant(GetApplicantRequest) returns (Applicant);
+}

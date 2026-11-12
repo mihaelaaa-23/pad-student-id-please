@@ -229,23 +229,27 @@
       }
     },
     {
-      "name": "Update Player XP",
+      "name": "Update Player XP - Internal Route",
       "event": [
         {
           "listen": "test",
           "script": {
             "type": "text/javascript",
             "exec": [
-              "// Lab 2, grade 10: XP is awarded by a service (Session, when a shift ends), never by a",
-              "// player. This request is sent with the player's own token, so Player Service refuses it.",
+              "// XP is awarded by a service (Session, when a shift ends), never by a player. Since",
+              "// Lab 4, grade 8, Session awards it through the session.ended event, so the Gateway",
+              "// treats this route as internal and answers it itself without forwarding it.",
               "// The Session collection shows the allowed path: \"Moderator Received Shift XP\".",
               "const json = pm.response.json();",
-              "pm.test('a player cannot award XP: 403 FORBIDDEN', function () {",
-              "    pm.response.to.have.status(403);",
+              "pm.test('a player cannot award XP: 404, the route is internal', function () {",
+              "    pm.response.to.have.status(404);",
               "});",
-              "pm.test('the error says why', function () {",
-              "    pm.expect(json.error.code).to.eql('FORBIDDEN');",
+              "pm.test('the Gateway refuses it as an internal route', function () {",
+              "    pm.expect(json.error.code).to.eql('ROUTE_NOT_FOUND');",
               "    pm.expect(json.error.message).to.be.a('string');",
+              "});",
+              "pm.test('no instance answered', function () {",
+              "    pm.expect(pm.response.headers.get('X-Instance-Id')).to.be.undefined;",
               "});"
             ]
           }

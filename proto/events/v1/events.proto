@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+// Event envelope shared by every publisher, the Message Broker and every subscriber.
+// Topic-based queues (Lab 4, Grade 6): a publisher sends an Event to the Broker,
+// the Broker fans it out to every service that registered interest in the topic.
+package events.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/mihaelaaa-23/pad-student-id-please/proto/gen/go/events/v1;eventsv1";
+
+message Event {
+  // UUID chosen by the publisher. A retried Publish with the same id is not
+  // enqueued twice, and subscribers use it to discard redeliveries.
+  string id = 1;
+  // "<domain>.<event>" in past tense, e.g. "session.ended". Must be declared
+  // in the event catalogue (CPR README); the Broker rejects unknown topics.
+  string topic = 2;
+  // serviceName of the publisher, e.g. "applicant-service".
+  string source = 3;
+  // X-Request-Id of the request that caused the event, so it can be followed in the logs.
+  string request_id = 4;
+  google.protobuf.Timestamp timestamp = 5;
+  // Topic-specific payload. JSON (UTF-8) unless content_type says otherwise;
+  // its shape per topic is documented in the event catalogue.
+  bytes payload = 6;
+  // Defaults to "application/json" when empty.
+  string content_type = 7;
+}
+
+message DeliverAck {
+  // True when the subscriber had already processed this event id and did nothing.
+  bool duplicate = 1;
+}
+
+// Implemented by every subscribing service on its gRPC server. The Broker pushes
+// each event to one healthy instance of each subscribing service.
+//
+// Delivery is at-least-once: Deliver may be called more than once for the same
+// event id, so handlers must be idempotent.
+//
+// Status codes the Broker acts on:
+//   OK                                    -> delivered, removed from the queue
+//   UNAVAILABLE, DEADLINE_EXCEEDED,
+//   RESOURCE_EXHAUSTED, INTERNAL          -> retried with backoff
+//   INVALID_ARGUMENT, FAILED_PRECONDITION,
+//   UNIMPLEMENTED, NOT_FOUND              -> moved to the Dead Letter Channel at once
+service EventSink {
+  rpc Deliver(Event) returns (DeliverAck);
+}

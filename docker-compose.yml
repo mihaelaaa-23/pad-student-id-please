@@ -3,30 +3,19 @@ services:
   # The single entry point. It waits only for Service Discovery: it reads the instance
   # list from it at startup and answers 502 BAD_GATEWAY for a service until it is up.
   gateway:
-    image: mihaela5/gateway:3.0.0
+    image: mihaela5/gateway:4.0.0-rc.5
     restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
       PORT: 3000
-      # Lab 3, grades 5 and 6: requests go to the healthy instances Service Discovery
-      # lists, in turn. The fixed URLs below stay for a service that does not register
-      # yet (README, Gateway notes, "Routing to instances").
+      # Lab 4, grade 5: every request goes to the Message Broker, which picks the instance
+      # and runs the circuit breaker (both moved there from the Gateway). The Gateway
+      # authenticates to it with SERVICE_TOKEN below.
+      MESSAGE_BROKER_URL: http://message-broker:3011
+      # Lab 3: the Gateway still registers itself, so Service Discovery health-polls it.
       SERVICE_DISCOVERY_URL: http://service-discovery:3010
       SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
-      # Lab 3, grades 7 and 10: remove reports a tripped instance to Service Discovery,
-      # which takes it out of rotation; log only logs it.
-      BREAKER_MODE: ${BREAKER_MODE:-remove}
-      PLAYER_SERVICE_URL: http://player-service:3001
-      SESSION_SERVICE_URL: http://session-service:3002
-      APPLICANT_SERVICE_URL: http://applicant-service:3003
-      CREDENTIAL_SERVICE_URL: http://credential-service:3004
-      RULES_SERVICE_URL: http://server-rules-service:3005
-      UNIVERSITY_RECORD_SERVICE_URL: http://university-record-service:3006
-      MODERATION_SERVICE_URL: http://moderation-service:3007
-      # Discord DMs serves REST on 3009; 3008 is the WebSocket listener alone, so
-      # forwarding there would answer 404 for every REST call.
-      DISCORD_DMS_SERVICE_URL: http://discord-dms-service:3009
       UPSTREAM_TIMEOUT_MS: ${GATEWAY_UPSTREAM_TIMEOUT_MS:-10000}
       # Lab 2, grade 8: requests forwarded at once, service-to-service calls included;
       # the next one gets 503 CONCURRENCY_LIMIT_REACHED with Retry-After: 1. Far above a
@@ -45,18 +34,22 @@ services:
       # The address the *client* connects to. The in-network name above means
       # nothing outside this network, and this URL is handed to the client.
       DISCORD_DMS_WS_PUBLIC_URL: ws://localhost:3008
+      # Lab 4, grade 4: GET /logs/download reads the logs of every container from Loki.
+      LOKI_URL: http://loki:3100
     # service_started, not service_healthy: with no list from Service Discovery the Gateway
     # routes to the fixed upstreams above, so Service Discovery failing to start does not
     # take down the only entry point.
     depends_on:
       service-discovery:
         condition: service_started
+      message-broker:
+        condition: service_started
 
   # ==================== Service Discovery (Ciprian) ====================
   # Internal registry; no host port is published. This image defines its own
   # Docker health check on /health.
   service-discovery:
-    image: ciprik13/service-discovery:3.0.0
+    image: ciprik13/service-discovery:4.0.0
     restart: unless-stopped
     environment:
       PORT: 3010
@@ -66,9 +59,126 @@ services:
       # means they are only logged. A credential: set it in .env, never here.
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
 
+  # ==================== Message Broker (Mihaela) ====================
+  # Lab 4: forwarding between the Gateway and the services and between services, with
+  # round-robin load balancing and the circuit breaker (moved from the Gateway). Not
+  # published: only the Gateway and the services reach it, with the service token.
+  # One thread per request; GET /status stays outside its concurrency limit.
+  message-broker:
+    image: mihaela5/message-broker:4.0.0-rc.6
+    restart: unless-stopped
+    environment:
+      PORT: 3011
+      LOG_LEVEL: ${MESSAGE_BROKER_LOG_LEVEL:-INFO}
+      # Every forwarded request must carry it (Authorization: Bearer); the Broker also
+      # registers with Service Discovery with it.
+      SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
+      # The least-loaded healthy instance Service Discovery lists (LB_STRATEGY=load); the
+      # fixed URLs below stay for a service it does not list.
+      # Lab 4: gRPC (Publish, topic deliveries, service-to-service calls) on 50011, inside
+      # the compose network only. Its own limit matches MAX_CONCURRENT_TASKS, so the
+      # Broker's shared limit is the one a gRPC caller meets.
+      BROKER_GRPC_PORT: 50011
+      GRPC_MAX_CONCURRENT_RPCS: ${MESSAGE_BROKER_MAX_CONCURRENT_TASKS:-500}
+      SERVICE_DISCOVERY_URL: http://service-discovery:3010
+      SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
+      BREAKER_MODE: ${BREAKER_MODE:-remove}
+      PLAYER_SERVICE_URL: http://player-service:3001
+      SESSION_SERVICE_URL: http://session-service:3002
+      APPLICANT_SERVICE_URL: http://applicant-service:3003
+      CREDENTIAL_SERVICE_URL: http://credential-service:3004
+      RULES_SERVICE_URL: http://server-rules-service:3005
+      UNIVERSITY_RECORD_SERVICE_URL: http://university-record-service:3006
+      MODERATION_SERVICE_URL: http://moderation-service:3007
+      # REST port; 3008 is the WebSocket listener alone.
+      DISCORD_DMS_SERVICE_URL: http://discord-dms-service:3009
+      UPSTREAM_TIMEOUT_MS: ${MESSAGE_BROKER_UPSTREAM_TIMEOUT_MS:-10000}
+      # Same reasoning as the Gateway's 500: one client request holds a slot per hop.
+      MAX_CONCURRENT_TASKS: ${MESSAGE_BROKER_MAX_CONCURRENT_TASKS:-500}
+      # Lab 4, grade 9: the queue, the Dead Letter Channel and the subscriptions live in one
+      # SQLite file on the broker_data volume, so an accepted event survives a restart.
+      QUEUE_STORE: sqlite
+      BROKER_DB_PATH: /data/broker.db
+      # Attempts of one delivery before it moves to the Dead Letter Channel (max_attempts).
+      MAX_DELIVERY_ATTEMPTS: ${MESSAGE_BROKER_MAX_DELIVERY_ATTEMPTS:-5}
+    volumes:
+      - broker_data:/data
+    # service_started, like the Gateway: without Service Discovery it uses the fixed URLs.
+    depends_on:
+      service-discovery:
+        condition: service_started
+
+  # ==================== Monitoring (Liviu) ====================
+  # Prometheus scrapes GET /metrics on every service; Grafana reads Prometheus.
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    restart: unless-stopped
+    ports:
+      - "${HOST_PROMETHEUS_PORT:-9090}:9090"
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=6h
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:9090/-/healthy || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 3000 is the Gateway, so Grafana is published on 3100.
+  grafana:
+    image: grafana/grafana:11.5.1
+    restart: unless-stopped
+    ports:
+      - "${HOST_GRAFANA_PORT:-3100}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_started
+      loki:
+        condition: service_started
+
+  # Lab 4, grade 4: the logs of every container, kept 24 h (monitoring/loki/loki.yml).
+  # Read by the Gateway's GET /logs/download and by Grafana; not published to the host.
+  loki:
+    image: grafana/loki:3.5.0
+    restart: unless-stopped
+    command: -config.file=/etc/loki/loki.yml
+    volumes:
+      - ./monitoring/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki_data:/loki
+
+  # Lab 4, grade 4: ships the stdout of every compose container to Loki, labelled with
+  # the compose service name (monitoring/alloy/config.alloy). The Docker socket is
+  # mounted read-only here and nowhere else; no service changes how it logs.
+  alloy:
+    image: grafana/alloy:v1.9.0
+    restart: unless-stopped
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./monitoring/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy_data:/var/lib/alloy/data
+    depends_on:
+      loki:
+        condition: service_started
+
   # ==================== Player Service (Mihaela) ====================
   player-service:
-    image: mihaela5/player-service:3.0.0
+    image: mihaela5/player-service:4.0.0-rc.2
     restart: unless-stopped
     # Lab 3, grade 5: two instances. Each registers its own container hostname with
     # Service Discovery, so there is no fixed host port and no container_name.
@@ -101,6 +211,11 @@ services:
       SERVICE_DISCOVERY_URL: http://service-discovery:3010
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
       SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
+      # Lab 4, grades 6 and 8: serves events.v1.EventSink/Deliver on 50001 and subscribes
+      # to session.ended, both sent with the registration, so the Broker delivers the shift
+      # XP to it (idempotent by event id).
+      GRPC_PORT: 50001
+      SD_TOPICS: session.ended
     depends_on:
       player-db:
         condition: service_healthy
@@ -125,7 +240,7 @@ services:
 
   # ==================== Server Moderation Session Service (Mihaela) ====================
   session-service:
-    image: mihaela5/session-service:3.0.0
+    image: mihaela5/session-service:4.0.0-rc.4
     restart: unless-stopped
     # Lab 3, grade 5: two instances; sessions live in session-db, so any instance can
     # serve any session.
@@ -140,12 +255,12 @@ services:
       DB_USER: ${SESSION_DB_USER}
       DB_PASSWORD: ${SESSION_DB_PASSWORD}
       DB_NAME: ${SESSION_DB_NAME}
-      # Through the Gateway, like every service-to-service call (Lab 2, grade 6).
-      PLAYER_SERVICE_URL: http://gateway:3000/player
-      APPLICANT_SERVICE_URL: http://gateway:3000/applicant
-      CREDENTIAL_SERVICE_URL: http://gateway:3000/credential
-      RULES_SERVICE_URL: http://gateway:3000/server-rules
-      UNIVERSITY_RECORD_SERVICE_URL: http://gateway:3000/university-record
+      # Through the Message Broker, like every service-to-service call (Lab 4, grade 5).
+      PLAYER_SERVICE_URL: http://message-broker:3011/player
+      APPLICANT_SERVICE_URL: http://message-broker:3011/applicant
+      CREDENTIAL_SERVICE_URL: http://message-broker:3011/credential
+      RULES_SERVICE_URL: http://message-broker:3011/server-rules
+      UNIVERSITY_RECORD_SERVICE_URL: http://message-broker:3011/university-record
       # Lab 2, grade 8: task timeout (504 TASK_TIMEOUT) and concurrent task limit
       # (503 CONCURRENCY_LIMIT_REACHED). Timeout budget (README, Gateway notes): 4500 per
       # outgoing call > every callee's TASK_TIMEOUT_MS; own cap 8000 < the Gateway's 10000.
@@ -158,14 +273,27 @@ services:
       # Lab 2, grade 10: sent as Authorization: Bearer on every outgoing call, so the
       # Gateway lets this service's own requests through.
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
-      # Lab 3: register with Service Discovery; circuit breaker on the five dependencies.
+      # Lab 3: register with Service Discovery. Since Lab 4 the circuit breaker on the
+      # dependencies is the Broker's, so Session has none of its own.
       SERVICE_DISCOVERY_URL: http://service-discovery:3010
       SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
-      BREAKER_MODE: ${BREAKER_MODE:-remove}
+      # Lab 4, grade 8: serves session.v1.SessionService/GetSession on 50002 for Discord
+      # DMs, registered with Service Discovery as its grpcUrl.
+      GRPC_PORT: 50002
+      # Lab 4, grade 6: ending a shift publishes one session.ended event to the Broker
+      # instead of a PATCH /players/{id}/xp per participant; Player subscribes to it.
+      BROKER_GRPC_URL: message-broker:50011
+      PUBLISH_TIMEOUT_MS: ${SESSION_PUBLISH_TIMEOUT_MS:-1500}
+      # Lab 4, grade 8: Applicant (GenerateApplicant) and Credential (IssueCredential,
+      # GetCredential) are called over gRPC through the Broker; Server Rules and University
+      # Record stay on REST through the Broker until they serve gRPC.
+      GRPC_DEPENDENCIES: applicant-service,credential-service
     depends_on:
       session-db:
         condition: service_healthy
       service-discovery:
+        condition: service_started
+      message-broker:
         condition: service_started
 
   session-db:
@@ -186,7 +314,7 @@ services:
 
   # ==================== Applicant Service (Ciprian) ====================
   applicant-service:
-    image: ciprik13/applicant-service:3.0.0
+    image: ciprik13/applicant-service:4.0.0
     restart: unless-stopped
     # Lab 3, grade 5: two instances, sharing applicant-db (STORE_DRIVER mongo).
     deploy:
@@ -202,8 +330,8 @@ services:
       DB_USER: ${APPLICANT_DB_USER}
       DB_PASSWORD: ${APPLICANT_DB_PASSWORD}
       DB_NAME: ${APPLICANT_DB_NAME}
-      # Through the Gateway, like every service-to-service call (Lab 2, grade 6).
-      UNIVERSITY_RECORD_SERVICE_URL: http://gateway:3000/university-record
+      # Through the Message Broker, like every service-to-service call (Lab 4, grade 5).
+      UNIVERSITY_RECORD_SERVICE_URL: http://message-broker:3011/university-record
       # Lab 2, grade 8: per-request task timeout (504 TASK_TIMEOUT) and concurrent
       # task limit (503 CONCURRENCY_LIMIT_REACHED). Test hooks stay off unless a
       # demo of the 503/504 turns them on through .env.
@@ -219,10 +347,17 @@ services:
       # Gateway lets this service's own requests through.
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
       ENABLE_TEST_HOOKS: ${ENABLE_TEST_HOOKS:-false}
-      # Lab 3: register with Service Discovery; circuit breaker on University Record.
+      # Lab 3: register with Service Discovery. Since Lab 4 the circuit breaker on
+      # University Record is the Broker's, so this service has none of its own.
       SERVICE_DISCOVERY_URL: http://service-discovery:3010
       SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
-      BREAKER_MODE: ${BREAKER_MODE:-remove}
+      # Lab 4, grade 8: serves applicant.v1.ApplicantService (GetApplicant,
+      # GenerateApplicant) on 50003, registered with Service Discovery as its grpcUrl.
+      GRPC_PORT: 50003
+      # Lab 4, grade 6: publishes applicant.created to the Broker.
+      BROKER_GRPC_URL: message-broker:50011
+      # Lab 4, grade 8: GetRecord goes to University Record over gRPC through the Broker.
+      GRPC_DEPENDENCIES: "university-record-service"
     depends_on:
       applicant-db:
         condition: service_healthy
@@ -247,7 +382,7 @@ services:
 
   # ==================== Credential Service (Ciprian) ====================
   credential-service:
-    image: ciprik13/credential-service:3.0.0
+    image: ciprik13/credential-service:4.0.0
     restart: unless-stopped
     # Lab 3, grade 5: two instances, sharing credential-db (STORE_DRIVER mongo).
     deploy:
@@ -258,10 +393,10 @@ services:
       PORT: 3004
       STORE_DRIVER: mongo
       CREDENTIAL_SIGNING_SECRET: ${CREDENTIAL_SIGNING_SECRET}
-      # Through the Gateway, like every service-to-service call (Lab 2, grade 6).
+      # Through the Message Broker, like every service-to-service call (Lab 4, grade 5).
       # Unset would mean every request that needs Applicant Service answers
       # 503 DEPENDENCY_UNAVAILABLE even though the real service is running here.
-      APPLICANT_SERVICE_URL: http://gateway:3000/applicant
+      APPLICANT_SERVICE_URL: http://message-broker:3011/applicant
       DB_HOST: credential-db
       DB_PORT: 27017
       DB_USER: ${CREDENTIAL_DB_USER}
@@ -282,10 +417,15 @@ services:
       # Gateway lets this service's own requests through.
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
       ENABLE_TEST_HOOKS: ${ENABLE_TEST_HOOKS:-false}
-      # Lab 3: register with Service Discovery; circuit breaker on Applicant.
+      # Lab 3: register with Service Discovery. Since Lab 4 the circuit breaker on
+      # Applicant is the Broker's, so this service has none of its own.
       SERVICE_DISCOVERY_URL: http://service-discovery:3010
       SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
-      BREAKER_MODE: ${BREAKER_MODE:-remove}
+      # Lab 4, grade 8: serves credential.v1.CredentialService (IssueCredential,
+      # GetCredential, ValidateCredential) on 50004, registered as its grpcUrl.
+      GRPC_PORT: 50004
+      # Lab 4, grade 8: Applicant is called over gRPC (GetApplicant) through the Broker.
+      BROKER_GRPC_URL: message-broker:50011
     depends_on:
       credential-db:
         condition: service_healthy
@@ -310,18 +450,20 @@ services:
 
   # ==================== Server Rules Service (Ion) ====================
   server-rules-service:
-    image: ion190/server-rules-service:3.0.0
+    image: ion190/server-rules-service:4.0.0-rc.1
     restart: unless-stopped
     deploy:
       replicas: ${RULES_REPLICAS:-2}
     environment:
       PORT: 3005
+      GRPC_PORT: 50005
+      GRPC_HOST: 0.0.0.0
       DB_HOST: rules-db
       DB_PORT: 27017
       DB_USER: ${RULES_DB_USER}
       DB_PASSWORD: ${RULES_DB_PASSWORD}
       DB_NAME: ${RULES_DB_NAME}
-      UNIVERSITY_RECORD_SERVICE_URL: http://gateway:3000/university-record
+      UNIVERSITY_RECORD_SERVICE_URL: http://message-broker:3011/university-record
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
       TASK_TIMEOUT_MS: ${RULES_TASK_TIMEOUT_MS:-3000}
       MAX_CONCURRENT_TASKS: ${RULES_MAX_CONCURRENT_TASKS:-50}
@@ -354,12 +496,14 @@ services:
 
   # ==================== University Record Service (Ion) ====================
   university-record-service:
-    image: ion190/university-record-service:3.0.0
+    image: ion190/university-record-service:4.0.0-rc.1
     restart: unless-stopped
     deploy:
       replicas: ${UNIVERSITY_RECORD_REPLICAS:-2}
     environment:
       PORT: 3006
+      GRPC_PORT: 50006
+      GRPC_HOST: 0.0.0.0
       DB_HOST: university-record-db
       DB_PORT: 5432
       DB_USER: ${UNIVERSITY_RECORD_DB_USER}
@@ -395,7 +539,7 @@ services:
 
   # ==================== Moderation Service (Liviu) ====================
   moderation-service:
-    image: d3adeye/moderation-service:3.0.0
+    image: d3adeye/moderation-service:4.0.0-rc.3
     restart: unless-stopped
     # Lab 3, grade 5: two instances. Each registers its own container hostname with
     # Service Discovery, so there is no fixed host port and no container_name. The
@@ -406,11 +550,11 @@ services:
     # at http://localhost:3000/moderation.
     environment:
       PORT: 3007
-      APPLICANT_SERVICE_URL: http://gateway:3000/applicant
-      CREDENTIAL_SERVICE_URL: http://gateway:3000/credential
-      RULES_SERVICE_URL: http://gateway:3000/server-rules
-      UNIVERSITY_RECORD_SERVICE_URL: http://gateway:3000/university-record
-      DISCORD_DMS_SERVICE_URL: http://gateway:3000/discord-dms
+      APPLICANT_SERVICE_URL: http://message-broker:3011/applicant
+      CREDENTIAL_SERVICE_URL: http://message-broker:3011/credential
+      RULES_SERVICE_URL: http://message-broker:3011/server-rules
+      UNIVERSITY_RECORD_SERVICE_URL: http://message-broker:3011/university-record
+      DISCORD_DMS_SERVICE_URL: http://message-broker:3011/discord-dms
       # Lab 2, grade 10: sent as Authorization: Bearer on every outgoing call, so the
       # Gateway lets this service's own requests through.
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
@@ -423,10 +567,16 @@ services:
       # load.critical, which Service Discovery alerts on.
       LOAD_CRITICAL_PERCENT: ${MODERATION_LOAD_CRITICAL_PERCENT:-80}
       # Lab 3, grades 4-5: register on startup, heartbeat, deregister on shutdown.
+      # Since Lab 4 the circuit breaker on the dependencies is the Broker's, so this
+      # service has none of its own.
       SERVICE_DISCOVERY_URL: http://service-discovery:3010
       SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
-      # Lab 3, grades 7 and 10: log a tripped instance, or also take it out of rotation.
-      BREAKER_MODE: ${BREAKER_MODE:-remove}
+      # Lab 4, grade 6: decision.recorded is published to the Broker over gRPC,
+      # and Discord DMs announces it in chat.
+      BROKER_GRPC_URL: message-broker:50011
+      # Lab 4, grade 8: all four dependencies are called over gRPC through the Broker.
+      # Applicant, Credential, Server Rules and University Record all serve gRPC.
+      GRPC_DEPENDENCIES: "applicant-service,credential-service,server-rules-service,university-record-service"
       # Lab 3, grade 3: DEBUG, INFO, WARN or ERROR.
       LOG_LEVEL: ${MODERATION_LOG_LEVEL:-INFO}
       DB_HOST: moderation-db
@@ -438,6 +588,8 @@ services:
       moderation-db:
         condition: service_healthy
       service-discovery:
+        condition: service_started
+      message-broker:
         condition: service_started
 
   moderation-db:
@@ -458,7 +610,7 @@ services:
 
   # ==================== Discord DMs Service (Liviu) ====================
   discord-dms-service:
-    image: d3adeye/discord-dms-service:3.0.0
+    image: d3adeye/discord-dms-service:4.0.0-rc.2
     restart: unless-stopped
     # One instance on purpose (Lab 3, grade 5): 3008 is published to the host, and a
     # message sent to one replica would not reach sockets connected to another.
@@ -473,7 +625,7 @@ services:
       HTTP_PORT: 3009
       MONGODB_URI: mongodb://${DISCORD_DMS_DB_USER}:${DISCORD_DMS_DB_PASSWORD}@discord-dms-db:27017/?authSource=admin
       MONGODB_DATABASE: ${DISCORD_DMS_DB_NAME}
-      SESSION_SERVICE_URL: http://gateway:3000/session
+      SESSION_SERVICE_URL: http://message-broker:3011/session
       WS_TICKET_SECRET: ${WS_TICKET_SECRET:-}
       # Lab 2, grade 10: sent as Authorization: Bearer on the session check, so the
       # Gateway lets this service's own request through.
@@ -492,14 +644,23 @@ services:
       # The REST port is registered, not the websocket one: that is where /status is.
       SERVICE_DISCOVERY_URL: http://service-discovery:3010
       SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
-      # Lab 3, grades 7 and 10: log a tripped instance, or also take it out of rotation.
-      BREAKER_MODE: ${BREAKER_MODE:-remove}
+      # Lab 4, grade 8: the session check goes to the Broker over gRPC, which forwards
+      # it to session.v1.SessionService/GetSession. SESSION_SERVICE_URL above is the
+      # REST fallback used when this is unset.
+      BROKER_GRPC_URL: message-broker:50011
+      # Lab 4, grades 6 and 8: serves events.v1.EventSink/Deliver on 50009 and subscribes
+      # to decision.recorded, both sent with the registration, so the Broker delivers a
+      # recorded verdict here and it is announced in chat (idempotent by event id).
+      GRPC_PORT: 50009
+      SD_TOPICS: decision.recorded
       # Lab 3, grade 3: DEBUG, INFO, WARN or ERROR.
       LOG_LEVEL: ${DISCORD_DMS_LOG_LEVEL:-INFO}
     depends_on:
       discord-dms-db:
         condition: service_healthy
       service-discovery:
+        condition: service_started
+      message-broker:
         condition: service_started
 
   discord-dms-db:
@@ -519,6 +680,11 @@ services:
       retries: 5
 
 volumes:
+  alloy_data:
+  broker_data:
+  loki_data:
+  prometheus_data:
+  grafana_data:
   player_db_data:
   session_db_data:
   applicant_db_data:

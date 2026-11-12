@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+// Server Moderation Session Service RPCs called by other services (Lab 4, Grade 8).
+// Draft: owner (Session) to confirm the RPC list and fields.
+package session.v1;
+
+option go_package = "github.com/mihaelaaa-23/pad-student-id-please/proto/gen/go/session/v1;sessionv1";
+
+message GetSessionRequest {
+  string session_id = 1;
+}
+
+message Session {
+  string session_id = 1;
+  string current_applicant_id = 2;
+  int32 processed_count = 3;
+  int32 score = 4;
+  string status = 5;
+}
+
+service SessionService {
+  // Discord DMs: checks that the shift exists before bootstrap, channels, members.
+  // NOT_FOUND when the shift does not exist. REST: GET /sessions/{id}.
+  rpc GetSession(GetSessionRequest) returns (Session);
+}

@@ -1,0 +1,77 @@
+# Prometheus scrape configuration for the stack (Lab 4, grade 10).
+#
+# Every service answers GET /metrics in the exposition format. Services run
+# with deploy.replicas, so each job resolves the compose service name over DNS
+# and scrapes every replica it returns.
+
+global:
+  scrape_interval: 10s
+  scrape_timeout: 5s
+
+scrape_configs:
+  - job_name: gateway
+    dns_sd_configs:
+      - names: [gateway]
+        type: A
+        port: 3000
+
+  - job_name: service-discovery
+    dns_sd_configs:
+      - names: [service-discovery]
+        type: A
+        port: 3010
+
+  - job_name: message-broker
+    dns_sd_configs:
+      - names: [message-broker]
+        type: A
+        port: 3011
+
+  - job_name: player-service
+    dns_sd_configs:
+      - names: [player-service]
+        type: A
+        port: 3001
+
+  - job_name: session-service
+    dns_sd_configs:
+      - names: [session-service]
+        type: A
+        port: 3002
+
+  - job_name: applicant-service
+    dns_sd_configs:
+      - names: [applicant-service]
+        type: A
+        port: 3003
+
+  - job_name: credential-service
+    dns_sd_configs:
+      - names: [credential-service]
+        type: A
+        port: 3004
+
+  - job_name: server-rules-service
+    dns_sd_configs:
+      - names: [server-rules-service]
+        type: A
+        port: 3005
+
+  - job_name: university-record-service
+    dns_sd_configs:
+      - names: [university-record-service]
+        type: A
+        port: 3006
+
+  - job_name: moderation-service
+    dns_sd_configs:
+      - names: [moderation-service]
+        type: A
+        port: 3007
+
+  # 3009 is the REST listener; 3008 is the WebSocket listener alone.
+  - job_name: discord-dms-service
+    dns_sd_configs:
+      - names: [discord-dms-service]
+        type: A
+        port: 3009
