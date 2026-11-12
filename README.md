@@ -1318,6 +1318,12 @@ curl -s -H "Authorization: Bearer $SERVICE_TOKEN" -OJ "http://localhost:3000/log
 
 The `requestId` filter follows one request through every service it touched: the Gateway, the Broker and each service log it on every line.
 
+`postman/gateway.postman_collection.json` checks it end to end: one traced request, then its lines from more than one service, a service and level filter, a player token refused (`403`), no token (`401`) and invalid filters (`422`). It needs the service token:
+
+```bash
+npx newman run postman/gateway.postman_collection.json --env-var serviceToken=$SERVICE_TOKEN
+```
+
 ## Project Board
 
 - Project Board: [Link to GitHub Project](https://github.com/users/mihaelaaa-23/projects/4)
