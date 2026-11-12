@@ -169,7 +169,7 @@ Following the database-per-service rule below, each service picked PostgreSQL or
 | Moderation Service | PostgreSQL | Relational audit trail of decisions and penalties |
 | Applicant Service | MongoDB | Applicant shape varies by role (student/alumnus/outsider) |
 | Credential Service | MongoDB | Credential documents vary by type |
-| Server Rules Service | MongoDB | Arbitrarily nested rule conditions |
+| Server Rules Service | [`ion190/server-rules-service:4.0.0-rc.2`](https://hub.docker.com/r/ion190/server-rules-service) | 3005, not published — reached through the Gateway at `/server-rules` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; `SERVICE_TOKEN` (required in Compose); `TASK_TIMEOUT_MS` (`3000`), `MAX_CONCURRENT_TASKS` (`50`), `BROKER_GRPC_URL` (`message-broker:50011` in Compose), `GRPC_TIMEOUT_MS` (`2500`, configured by `RULES_GRPC_TIMEOUT_MS`), `LOAD_CRITICAL_PERCENT` (`80`), `SERVICE_DISCOVERY_URL`, `SD_HEARTBEAT_MS` (`10000`); `GRPC_PORT` (`50005` in Compose; serves `server_rules.v1.ServerRulesService/EvaluateRules`). |
 | Discord DMs Service | MongoDB | High-write, document-shaped chat messages |
 
 The Gateway has no database (see its Service Boundaries entry).
