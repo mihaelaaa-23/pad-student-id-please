@@ -496,7 +496,7 @@ services:
 
   # ==================== University Record Service (Ion) ====================
   university-record-service:
-    image: ion190/university-record-service:4.0.0-rc.1
+    image: ion190/university-record-service:4.0.0-rc.2
     restart: unless-stopped
     deploy:
       replicas: ${UNIVERSITY_RECORD_REPLICAS:-2}
@@ -515,6 +515,7 @@ services:
       SERVICE_DISCOVERY_URL: http://service-discovery:3010
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
       SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
+      SD_TOPICS: applicant.created
     depends_on:
       university-record-db:
         condition: service_healthy
