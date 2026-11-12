@@ -356,9 +356,8 @@ services:
       GRPC_PORT: 50003
       # Lab 4, grade 6: publishes applicant.created to the Broker.
       BROKER_GRPC_URL: message-broker:50011
-      # Lab 4, grade 8: University Record is still called over REST until it serves gRPC;
-      # then add university-record-service here.
-      GRPC_DEPENDENCIES: "server-rules-service,university-record-service"
+      # Lab 4, grade 8: GetRecord goes to University Record over gRPC through the Broker.
+      GRPC_DEPENDENCIES: "university-record-service"
     depends_on:
       applicant-db:
         condition: service_healthy
@@ -575,16 +574,9 @@ services:
       # Lab 4, grade 6: decision.recorded is published to the Broker over gRPC,
       # and Discord DMs announces it in chat.
       BROKER_GRPC_URL: message-broker:50011
-      # Lab 4, grade 8: which dependencies are called over gRPC instead of REST.
-      # Applicant and Credential serve gRPC since 4.0.0-rc.2 (#185), so GetApplicant
-      # and GetCredential go through the Broker over gRPC. Server Rules and
-      # University Record stay REST until their images serve gRPC: the Broker answers
-      # a call for a service with no gRPC instance with Unavailable, and that fails
-      # the decision. Add each name here as its image lands, comma-separated.
-      # The four URLs above stay set either way: an empty one means that
-      # dependency does not exist and the decision answers 503
-      # DEPENDENCY_UNAVAILABLE.
-      GRPC_DEPENDENCIES: "applicant-service,credential-service"
+      # Lab 4, grade 8: all four dependencies are called over gRPC through the Broker.
+      # Applicant, Credential, Server Rules and University Record all serve gRPC.
+      GRPC_DEPENDENCIES: "applicant-service,credential-service,server-rules-service,university-record-service"
       # Lab 3, grade 3: DEBUG, INFO, WARN or ERROR.
       LOG_LEVEL: ${MODERATION_LOG_LEVEL:-INFO}
       DB_HOST: moderation-db
