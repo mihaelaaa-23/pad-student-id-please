@@ -1,0 +1,364 @@
+{
+  "info": {
+    "_postman_id": "b1e1b2b0-3333-4a1a-9c1a-gateway00001",
+    "name": "Gateway - Log Download",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Lab 4, grade 4: GET /logs/download on the Gateway. Run with the service token:\nnpx newman run postman/gateway.postman_collection.json --env-var serviceToken=$SERVICE_TOKEN"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "Register Test Player",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// The log route needs the service token; a player is registered only to show that",
+              "// a player token is refused (403) and to make a traced request through the stack.",
+              "pm.collectionVariables.set('username', 'gateway_pm_' + Date.now());"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('test player was registered', function () { pm.response.to.have.status(201); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{playerUrl}}/players/register",
+        "auth": {
+          "type": "noauth"
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"username\": \"{{username}}\",\n  \"email\": \"{{username}}@test.com\",\n  \"password\": \"pw123\"\n}"
+        }
+      }
+    },
+    {
+      "name": "Login Test Player",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('test player logged in', function () { pm.response.to.have.status(200); });",
+              "pm.collectionVariables.set('token', pm.response.json().token);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{playerUrl}}/players/login",
+        "auth": {
+          "type": "noauth"
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"username\": \"{{username}}\",\n  \"password\": \"pw123\"\n}"
+        }
+      }
+    },
+    {
+      "name": "Traced Request Through The Stack",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// One request with a known X-Request-Id: Gateway -> Broker -> Applicant. The log",
+              "// download below asks for exactly this id.",
+              "const id = 'pm-logs-demo-' + Date.now().toString(36);",
+              "pm.collectionVariables.set('demoRequestId', id);",
+              "pm.request.headers.upsert({ key: 'X-Request-Id', value: id });"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 201', function () { pm.response.to.have.status(201); });",
+              "pm.test('the Gateway echoes the request id', function () {",
+              "  pm.expect(pm.response.headers.get('X-Request-Id')).to.eql(pm.collectionVariables.get('demoRequestId'));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{gatewayUrl}}/applicant/applicants",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Ana Rusu\",\n  \"studentId\": \"FCIM-234411\",\n  \"major\": \"Software Engineering\",\n  \"year\": 2,\n  \"role\": \"student_faf\",\n  \"status\": \"active\"\n}"
+        }
+      }
+    },
+    {
+      "name": "Download Logs - One Request",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Alloy ships container logs to Loki within a few seconds; give it time first.",
+              "setTimeout(function () {}, 8000);"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('serviceToken is set (newman --env-var serviceToken=$SERVICE_TOKEN)', function () {",
+              "  pm.expect(pm.collectionVariables.get('serviceToken') || pm.environment.get('serviceToken')).to.be.a('string').and.not.empty;",
+              "});",
+              "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('an NDJSON attachment', function () {",
+              "  pm.expect(pm.response.headers.get('Content-Type')).to.include('application/x-ndjson');",
+              "  pm.expect(pm.response.headers.get('Content-Disposition')).to.match(/^attachment; filename=\"logs-.*\\.ndjson\"$/);",
+              "});",
+              "const lines = pm.response.text().split('\\n').filter(Boolean);",
+              "const rows = lines.map(function (l) { return JSON.parse(l); });",
+              "pm.test('X-Log-Lines matches the lines', function () {",
+              "  pm.expect(Number(pm.response.headers.get('X-Log-Lines'))).to.eql(lines.length);",
+              "});",
+              "pm.test('the request was logged by more than one service', function () {",
+              "  const services = new Set(rows.map(function (r) { return r.service; }));",
+              "  // Broker and Applicant at least; the Gateway too when it runs in compose.",
+              "  pm.expect(services.has('message-broker')).to.be.true;",
+              "  pm.expect(services.has('applicant-service')).to.be.true;",
+              "});",
+              "pm.test('every line carries that request id, oldest first', function () {",
+              "  rows.forEach(function (r) { pm.expect(r.requestId).to.eql(pm.collectionVariables.get('demoRequestId')); });",
+              "  const times = rows.map(function (r) { return r.timestamp; });",
+              "  pm.expect(times.slice().sort()).to.eql(times);",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{gatewayUrl}}/logs/download?requestId={{demoRequestId}}",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{serviceToken}}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Download Logs - One Service And Level",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+              "const lines = pm.response.text().split('\\n').filter(Boolean);",
+              "const rows = lines.map(function (l) { return JSON.parse(l); });",
+              "pm.test('at most the limit', function () { pm.expect(rows.length).to.be.at.most(5); });",
+              "pm.test('only the Gateway, only INFO', function () {",
+              "  rows.forEach(function (r) { pm.expect(r.service).to.eql('gateway'); pm.expect(r.level).to.eql('INFO'); });",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{gatewayUrl}}/logs/download?service=gateway&level=INFO&limit=5",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{serviceToken}}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Download Logs - Player Token Refused",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// The lines carry other players' ids: only the service token may download them.",
+              "pm.test('status is 403', function () { pm.response.to.have.status(403); });",
+              "pm.test('error code FORBIDDEN', function () { pm.expect(pm.response.json().error.code).to.eql('FORBIDDEN'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{gatewayUrl}}/logs/download"
+      }
+    },
+    {
+      "name": "Download Logs - No Token",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 401', function () { pm.response.to.have.status(401); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{gatewayUrl}}/logs/download",
+        "auth": {
+          "type": "noauth"
+        }
+      }
+    },
+    {
+      "name": "Download Logs - Invalid Level",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status is 422', function () { pm.response.to.have.status(422); });",
+              "pm.test('error code VALIDATION_FAILED', function () { pm.expect(pm.response.json().error.code).to.eql('VALIDATION_FAILED'); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{gatewayUrl}}/logs/download?level=TRACE",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{serviceToken}}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Download Logs - Window Beyond Retention",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// At most 24 h apart: Loki keeps the logs for 24 h.",
+              "pm.test('status is 422', function () { pm.response.to.have.status(422); });"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{gatewayUrl}}/logs/download?from=2026-01-01T00:00:00Z&to=2026-01-03T00:00:00Z",
+        "auth": {
+          "type": "bearer",
+          "bearer": [
+            {
+              "key": "token",
+              "value": "{{serviceToken}}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "gatewayUrl",
+      "value": "http://localhost:3000"
+    },
+    {
+      "key": "playerUrl",
+      "value": "http://localhost:3000/player"
+    },
+    {
+      "key": "serviceToken",
+      "value": ""
+    },
+    {
+      "key": "username",
+      "value": ""
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "demoRequestId",
+      "value": ""
+    }
+  ]
+}

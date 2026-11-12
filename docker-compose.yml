@@ -3,7 +3,7 @@ services:
   # The single entry point. It waits only for Service Discovery: it reads the instance
   # list from it at startup and answers 502 BAD_GATEWAY for a service until it is up.
   gateway:
-    image: mihaela5/gateway:4.0.0-rc.3
+    image: mihaela5/gateway:4.0.0-rc.5
     restart: unless-stopped
     ports:
       - "3000:3000"
@@ -34,6 +34,8 @@ services:
       # The address the *client* connects to. The in-network name above means
       # nothing outside this network, and this URL is handed to the client.
       DISCORD_DMS_WS_PUBLIC_URL: ws://localhost:3008
+      # Lab 4, grade 4: GET /logs/download reads the logs of every container from Loki.
+      LOKI_URL: http://loki:3100
     # service_started, not service_healthy: with no list from Service Discovery the Gateway
     # routes to the fixed upstreams above, so Service Discovery failing to start does not
     # take down the only entry point.
@@ -47,7 +49,7 @@ services:
   # Internal registry; no host port is published. This image defines its own
   # Docker health check on /health.
   service-discovery:
-    image: ciprik13/service-discovery:4.0.0-rc.1
+    image: ciprik13/service-discovery:4.0.0
     restart: unless-stopped
     environment:
       PORT: 3010
@@ -63,7 +65,7 @@ services:
   # published: only the Gateway and the services reach it, with the service token.
   # One thread per request; GET /status stays outside its concurrency limit.
   message-broker:
-    image: mihaela5/message-broker:4.0.0-rc.5
+    image: mihaela5/message-broker:4.0.0-rc.6
     restart: unless-stopped
     environment:
       PORT: 3011
@@ -93,6 +95,14 @@ services:
       UPSTREAM_TIMEOUT_MS: ${MESSAGE_BROKER_UPSTREAM_TIMEOUT_MS:-10000}
       # Same reasoning as the Gateway's 500: one client request holds a slot per hop.
       MAX_CONCURRENT_TASKS: ${MESSAGE_BROKER_MAX_CONCURRENT_TASKS:-500}
+      # Lab 4, grade 9: the queue, the Dead Letter Channel and the subscriptions live in one
+      # SQLite file on the broker_data volume, so an accepted event survives a restart.
+      QUEUE_STORE: sqlite
+      BROKER_DB_PATH: /data/broker.db
+      # Attempts of one delivery before it moves to the Dead Letter Channel (max_attempts).
+      MAX_DELIVERY_ATTEMPTS: ${MESSAGE_BROKER_MAX_DELIVERY_ATTEMPTS:-5}
+    volumes:
+      - broker_data:/data
     # service_started, like the Gateway: without Service Discovery it uses the fixed URLs.
     depends_on:
       service-discovery:
@@ -133,6 +143,37 @@ services:
       - grafana_data:/var/lib/grafana
     depends_on:
       prometheus:
+        condition: service_started
+      loki:
+        condition: service_started
+
+  # Lab 4, grade 4: the logs of every container, kept 24 h (monitoring/loki/loki.yml).
+  # Read by the Gateway's GET /logs/download and by Grafana; not published to the host.
+  loki:
+    image: grafana/loki:3.5.0
+    restart: unless-stopped
+    command: -config.file=/etc/loki/loki.yml
+    volumes:
+      - ./monitoring/loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki_data:/loki
+
+  # Lab 4, grade 4: ships the stdout of every compose container to Loki, labelled with
+  # the compose service name (monitoring/alloy/config.alloy). The Docker socket is
+  # mounted read-only here and nowhere else; no service changes how it logs.
+  alloy:
+    image: grafana/alloy:v1.9.0
+    restart: unless-stopped
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./monitoring/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy_data:/var/lib/alloy/data
+    depends_on:
+      loki:
         condition: service_started
 
   # ==================== Player Service (Mihaela) ====================
@@ -199,7 +240,7 @@ services:
 
   # ==================== Server Moderation Session Service (Mihaela) ====================
   session-service:
-    image: mihaela5/session-service:4.0.0-rc.3
+    image: mihaela5/session-service:4.0.0-rc.4
     restart: unless-stopped
     # Lab 3, grade 5: two instances; sessions live in session-db, so any instance can
     # serve any session.
@@ -243,6 +284,10 @@ services:
       # instead of a PATCH /players/{id}/xp per participant; Player subscribes to it.
       BROKER_GRPC_URL: message-broker:50011
       PUBLISH_TIMEOUT_MS: ${SESSION_PUBLISH_TIMEOUT_MS:-1500}
+      # Lab 4, grade 8: Applicant (GenerateApplicant) and Credential (IssueCredential,
+      # GetCredential) are called over gRPC through the Broker; Server Rules and University
+      # Record stay on REST through the Broker until they serve gRPC.
+      GRPC_DEPENDENCIES: applicant-service,credential-service
     depends_on:
       session-db:
         condition: service_healthy
@@ -269,7 +314,7 @@ services:
 
   # ==================== Applicant Service (Ciprian) ====================
   applicant-service:
-    image: ciprik13/applicant-service:3.0.0
+    image: ciprik13/applicant-service:4.0.0
     restart: unless-stopped
     # Lab 3, grade 5: two instances, sharing applicant-db (STORE_DRIVER mongo).
     deploy:
@@ -302,10 +347,18 @@ services:
       # Gateway lets this service's own requests through.
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
       ENABLE_TEST_HOOKS: ${ENABLE_TEST_HOOKS:-false}
-      # Lab 3: register with Service Discovery; circuit breaker on University Record.
+      # Lab 3: register with Service Discovery. Since Lab 4 the circuit breaker on
+      # University Record is the Broker's, so this service has none of its own.
       SERVICE_DISCOVERY_URL: http://service-discovery:3010
       SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
-      BREAKER_MODE: ${BREAKER_MODE:-remove}
+      # Lab 4, grade 8: serves applicant.v1.ApplicantService (GetApplicant,
+      # GenerateApplicant) on 50003, registered with Service Discovery as its grpcUrl.
+      GRPC_PORT: 50003
+      # Lab 4, grade 6: publishes applicant.created to the Broker.
+      BROKER_GRPC_URL: message-broker:50011
+      # Lab 4, grade 8: University Record is still called over REST until it serves gRPC;
+      # then add university-record-service here.
+      GRPC_DEPENDENCIES: ""
     depends_on:
       applicant-db:
         condition: service_healthy
@@ -330,7 +383,7 @@ services:
 
   # ==================== Credential Service (Ciprian) ====================
   credential-service:
-    image: ciprik13/credential-service:3.0.0
+    image: ciprik13/credential-service:4.0.0
     restart: unless-stopped
     # Lab 3, grade 5: two instances, sharing credential-db (STORE_DRIVER mongo).
     deploy:
@@ -365,10 +418,15 @@ services:
       # Gateway lets this service's own requests through.
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
       ENABLE_TEST_HOOKS: ${ENABLE_TEST_HOOKS:-false}
-      # Lab 3: register with Service Discovery; circuit breaker on Applicant.
+      # Lab 3: register with Service Discovery. Since Lab 4 the circuit breaker on
+      # Applicant is the Broker's, so this service has none of its own.
       SERVICE_DISCOVERY_URL: http://service-discovery:3010
       SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
-      BREAKER_MODE: ${BREAKER_MODE:-remove}
+      # Lab 4, grade 8: serves credential.v1.CredentialService (IssueCredential,
+      # GetCredential, ValidateCredential) on 50004, registered as its grpcUrl.
+      GRPC_PORT: 50004
+      # Lab 4, grade 8: Applicant is called over gRPC (GetApplicant) through the Broker.
+      BROKER_GRPC_URL: message-broker:50011
     depends_on:
       credential-db:
         condition: service_healthy
@@ -518,14 +576,15 @@ services:
       # and Discord DMs announces it in chat.
       BROKER_GRPC_URL: message-broker:50011
       # Lab 4, grade 8: which dependencies are called over gRPC instead of REST.
-      # Empty until Applicant, Credential, Server Rules and University Record run
-      # images that serve gRPC: the Broker answers a call for a service with no
-      # gRPC instance with Unavailable, and that fails the decision. Add each name
-      # here as its image lands, comma-separated.
+      # Applicant and Credential serve gRPC since 4.0.0-rc.2 (#185), so GetApplicant
+      # and GetCredential go through the Broker over gRPC. Server Rules and
+      # University Record stay REST until their images serve gRPC: the Broker answers
+      # a call for a service with no gRPC instance with Unavailable, and that fails
+      # the decision. Add each name here as its image lands, comma-separated.
       # The four URLs above stay set either way: an empty one means that
       # dependency does not exist and the decision answers 503
       # DEPENDENCY_UNAVAILABLE.
-      GRPC_DEPENDENCIES: ""
+      GRPC_DEPENDENCIES: "applicant-service,credential-service"
       # Lab 3, grade 3: DEBUG, INFO, WARN or ERROR.
       LOG_LEVEL: ${MODERATION_LOG_LEVEL:-INFO}
       DB_HOST: moderation-db
@@ -629,6 +688,9 @@ services:
       retries: 5
 
 volumes:
+  alloy_data:
+  broker_data:
+  loki_data:
   prometheus_data:
   grafana_data:
   player_db_data:

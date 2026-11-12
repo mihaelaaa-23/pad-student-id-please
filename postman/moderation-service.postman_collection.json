@@ -2,32 +2,111 @@
   "info": {
     "_postman_id": "9c4e7a12-8b03-4d55-a1e6-2f7b5c9d0e02",
     "name": "Moderation Service",
-    "description": "Every HTTP endpoint of the Moderation Service (Team 18, PAD project \"Student ID, Please\"), ordered as a walkthrough of one shift: call three applicants, look the calls up, revise one of them, read the shift summary, then clean up.\n\nRun it top to bottom with the Collection Runner against a running stack (`./scripts/run.sh`, or `docker compose up -d`). Each request asserts its own status code and the decision id is passed between requests through a collection variable.\n\nThe applicant ids are not arbitrary. While the Applicant, Credential, Server Rules and University Record Services are not deployed yet, this service simulates them, and the simulated applicant is derived from the applicant id - so the same id is always the same person and the assertions below hold every run:\n\n- `applicant-1006` is a clean, enrolled student, so **accept** is the right call\n- `applicant-1000` presents a forged student ID, so **reject** is the right call\n- `applicant-1026` was banned from the server before, so **ban** is the right call\n\nOnce a teammate deploys the real service, set its URL in `.env` and the same requests are answered from live data instead.\n\nThe collection is re-runnable: the first request under **Decisions** gives each run its own `sessionId` (`shift-<timestamp>`), because the service records one decision per applicant per session and would otherwise answer `409` on a second run.",
+    "description": "Every HTTP endpoint of the Moderation Service (Team 18, PAD project \"Student ID, Please\"), ordered as a walkthrough of one shift: seed three applicants, call them, look the calls up, revise one of them, read the shift summary, then clean up.\n\nRun it top to bottom with the Collection Runner against a running stack (`docker compose up -d`). Each request asserts its own status code, and the ids are passed between requests through collection variables.\n\n**Setup** creates its own applicants, because Moderation only judges applicants that really exist: `POST /moderation/decide` answers `404 NOT_FOUND` for an unknown id. Each applicant gets a profile in Applicant Service, a university record in University Record Service and a credential from Credential Service, which is what the four dependencies are then asked about:\n\n- the **clean** applicant is enrolled, never banned and holds an honest credential\n- the **forged** applicant holds a credential issued with `scenario: fake_student_id`, so it comes back `valid: false` with `FORGED_SIGNATURE`\n- the **banned** applicant has a university record with `previouslyBanned: true`\n\nThe verdict assertions are deliberately about internal consistency - `correct` agrees with `decision == expectedDecision`, a correct call costs nothing, a wrong one costs something - rather than hardcoding a verdict per applicant. That way the collection stays green while the dependencies' own rules change. At the time of writing Server Rules Service reports `NO_PREVIOUS_BAN` as violated for every applicant, which makes `expectedDecision` `ban` for all three; once that is fixed the clean applicant scores `accept` and the forged one `reject`, and these same assertions still hold.\n\nThe collection is re-runnable: the first request under **Decisions** gives each run its own `sessionId` (`shift-<timestamp>`), because the service records one decision per applicant per session and would otherwise answer `409` on a second run. **Cleanup** removes the applicants and records it created, so re-running does not pile them up.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
-  "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{token}}", "type": "string"}]},
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
   "variable": [
-    { "key": "baseUrl", "value": "http://localhost:3000/moderation" },
-    { "key": "sessionId", "value": "shift-001" },
-    { "key": "moderatorId", "value": "player-moderator-1" },
-    { "key": "cleanApplicant", "value": "applicant-1006" },
-    { "key": "forgedApplicant", "value": "applicant-1000" },
-    { "key": "bannedApplicant", "value": "applicant-1026" },
-    { "key": "decisionId", "value": "" },
-    { "key": "throwawayDecisionId", "value": "" },
-    { "key": "playerUrl", "value": "http://localhost:3000/player" },
-    { "key": "username", "value": "" },
-    { "key": "playerId", "value": "" },
-    { "key": "token", "value": "" }
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000/moderation"
+    },
+    {
+      "key": "applicantUrl",
+      "value": "http://localhost:3000/applicant"
+    },
+    {
+      "key": "credentialUrl",
+      "value": "http://localhost:3000/credential"
+    },
+    {
+      "key": "recordUrl",
+      "value": "http://localhost:3000/university-record"
+    },
+    {
+      "key": "playerUrl",
+      "value": "http://localhost:3000/player"
+    },
+    {
+      "key": "sessionId",
+      "value": "shift-001"
+    },
+    {
+      "key": "moderatorId",
+      "value": "player-moderator-1"
+    },
+    {
+      "key": "cleanApplicant",
+      "value": ""
+    },
+    {
+      "key": "forgedApplicant",
+      "value": ""
+    },
+    {
+      "key": "bannedApplicant",
+      "value": ""
+    },
+    {
+      "key": "cleanStudentId",
+      "value": ""
+    },
+    {
+      "key": "forgedStudentId",
+      "value": ""
+    },
+    {
+      "key": "bannedStudentId",
+      "value": ""
+    },
+    {
+      "key": "decisionId",
+      "value": ""
+    },
+    {
+      "key": "throwawayDecisionId",
+      "value": ""
+    },
+    {
+      "key": "username",
+      "value": ""
+    },
+    {
+      "key": "playerId",
+      "value": ""
+    },
+    {
+      "key": "token",
+      "value": ""
+    }
   ],
   "item": [
     {
       "name": "Register Test Player",
       "request": {
-        "auth": { "type": "noauth" },
+        "auth": {
+          "type": "noauth"
+        },
         "method": "POST",
-        "header": [{ "key": "Content-Type", "value": "application/json" }],
-        "body": { "mode": "raw", "raw": "{\n    \"username\": \"{{username}}\",\n    \"email\": \"{{username}}@test.com\",\n    \"password\": \"pw123\"\n}" },
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"username\": \"{{username}}\",\n    \"email\": \"{{username}}@test.com\",\n    \"password\": \"pw123\"\n}"
+        },
         "url": {
           "raw": "{{playerUrl}}/players/register",
           "host": ["{{playerUrl}}"],
@@ -63,10 +142,20 @@
     {
       "name": "Login Test Player",
       "request": {
-        "auth": { "type": "noauth" },
+        "auth": {
+          "type": "noauth"
+        },
         "method": "POST",
-        "header": [{ "key": "Content-Type", "value": "application/json" }],
-        "body": { "mode": "raw", "raw": "{\n    \"username\": \"{{username}}\",\n    \"password\": \"pw123\"\n}" },
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"username\": \"{{username}}\",\n    \"password\": \"pw123\"\n}"
+        },
         "url": {
           "raw": "{{playerUrl}}/players/login",
           "host": ["{{playerUrl}}"],
@@ -91,6 +180,387 @@
       ]
     },
     {
+      "name": "Setup",
+      "description": "Creates the three applicants this collection judges. Moderation holds no applicants of its own: it reads them from Applicant, Credential, Server Rules and University Record, and refuses to judge an id none of them knows. These requests go to those services through the Gateway, with the same player token as everything else.",
+      "item": [
+        {
+          "name": "Create the clean applicant",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{applicantUrl}}/applicants",
+              "host": ["{{applicantUrl}}"],
+              "path": ["applicants"]
+            },
+            "description": "An enrolled student with nothing against them. POST /applicants/generate is not used: it is an internal-only route and the Gateway no longer exposes it, and a generated applicant is random where this one has to be known in advance.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"name\": \"Postman Clean Student\",\n    \"studentId\": \"{{cleanStudentId}}\",\n    \"major\": \"Software Engineering\",\n    \"year\": 3,\n    \"role\": \"student_faf\",\n    \"status\": \"active\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// One student id per applicant per run. The format is FCIM- plus six digits;",
+                  "// anything else is reported as MALFORMED_STUDENT_ID by Credential Service.",
+                  "// They are not shared between runs, so two runs never collide on an identity.",
+                  "const run = String(Date.now()).slice(-5);",
+                  "pm.collectionVariables.set('cleanStudentId', 'FCIM-1' + run);",
+                  "pm.collectionVariables.set('forgedStudentId', 'FCIM-2' + run);",
+                  "pm.collectionVariables.set('bannedStudentId', 'FCIM-3' + run);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the applicant was created', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "const body = pm.response.json();",
+                  "pm.test('it came back with the identity this run asked for', function () {",
+                  "    pm.expect(body.applicantId).to.be.a('string').that.is.not.empty;",
+                  "    pm.expect(body.studentId).to.eql(pm.collectionVariables.get('cleanStudentId'));",
+                  "    pm.expect(body.status).to.eql('active');",
+                  "});",
+                  "// Moderation is asked about this id below. It is a UUID the service assigns,",
+                  "// never one the collection picks, so it has to be captured here.",
+                  "pm.collectionVariables.set('cleanApplicant', body.applicantId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Give the clean applicant a university record",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{recordUrl}}/records",
+              "host": ["{{recordUrl}}"],
+              "path": ["records"]
+            },
+            "description": "Without a record the applicant cannot be confirmed to exist at the university, which on its own is enough for the evidence to call for a closer look. previouslyBanned is false and isEnrolled is true, so nothing here speaks against them.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"applicantId\": \"{{cleanApplicant}}\",\n    \"name\": \"Postman Clean Student\",\n    \"studentId\": \"{{cleanStudentId}}\",\n    \"role\": \"student_faf\",\n    \"university\": \"Technical University of Moldova\",\n    \"faculty\": \"FCIM\",\n    \"program\": \"Software Engineering\",\n    \"studyYear\": 3,\n    \"status\": \"active\",\n    \"averageGrade\": 9.1,\n    \"previouslyBanned\": false,\n    \"isEnrolled\": true\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the university record was created', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Issue the clean applicant an honest credential",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{credentialUrl}}/credentials/{{cleanApplicant}}",
+              "host": ["{{credentialUrl}}"],
+              "path": ["credentials", "{{cleanApplicant}}"]
+            },
+            "description": "An honest credential verifies, so it comes back valid with no issues.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"scenario\": \"honest\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the credential was issued', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "pm.test('it is an honest credential', function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.valid).to.be.true;",
+                  "    pm.expect(body.issues).to.be.an('array').that.is.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create the forged applicant",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{applicantUrl}}/applicants",
+              "host": ["{{applicantUrl}}"],
+              "path": ["applicants"]
+            },
+            "description": "The profile itself is ordinary. What is wrong with this applicant is the credential they present, issued two requests below.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"name\": \"Postman Forged Student\",\n    \"studentId\": \"{{forgedStudentId}}\",\n    \"major\": \"Software Engineering\",\n    \"year\": 3,\n    \"role\": \"student_faf\",\n    \"status\": \"active\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the applicant was created', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "const body = pm.response.json();",
+                  "pm.test('it came back with the identity this run asked for', function () {",
+                  "    pm.expect(body.applicantId).to.be.a('string').that.is.not.empty;",
+                  "    pm.expect(body.studentId).to.eql(pm.collectionVariables.get('forgedStudentId'));",
+                  "    pm.expect(body.status).to.eql('active');",
+                  "});",
+                  "// Moderation is asked about this id below. It is a UUID the service assigns,",
+                  "// never one the collection picks, so it has to be captured here.",
+                  "pm.collectionVariables.set('forgedApplicant', body.applicantId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Give the forged applicant a university record",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{recordUrl}}/records",
+              "host": ["{{recordUrl}}"],
+              "path": ["records"]
+            },
+            "description": "So that the forged credential is the only thing against them, and the verdict is about the forgery rather than a missing record.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"applicantId\": \"{{forgedApplicant}}\",\n    \"name\": \"Postman Forged Student\",\n    \"studentId\": \"{{forgedStudentId}}\",\n    \"role\": \"student_faf\",\n    \"university\": \"Technical University of Moldova\",\n    \"faculty\": \"FCIM\",\n    \"program\": \"Software Engineering\",\n    \"studyYear\": 3,\n    \"status\": \"active\",\n    \"averageGrade\": 9.1,\n    \"previouslyBanned\": false,\n    \"isEnrolled\": true\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the university record was created', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Issue the forged applicant a forged credential",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{credentialUrl}}/credentials/{{forgedApplicant}}",
+              "host": ["{{credentialUrl}}"],
+              "path": ["credentials", "{{forgedApplicant}}"]
+            },
+            "description": "scenario is an enum: honest, fake_student_id, impersonation, wrong_major_year, expired_status or outsider_claiming_staff. fake_student_id is the one whose authenticity signature does not verify.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"scenario\": \"fake_student_id\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the credential was issued', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "pm.test('it is a forgery, and says why', function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.valid).to.be.false;",
+                  "    pm.expect(body.issues).to.include('FORGED_SIGNATURE');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create the previously banned applicant",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{applicantUrl}}/applicants",
+              "host": ["{{applicantUrl}}"],
+              "path": ["applicants"]
+            },
+            "description": "Their profile and credential are both in order. The ban is in the university record, which is the point: it is the evidence a moderator cannot see from the documents alone.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"name\": \"Postman Banned Student\",\n    \"studentId\": \"{{bannedStudentId}}\",\n    \"major\": \"Software Engineering\",\n    \"year\": 3,\n    \"role\": \"student_faf\",\n    \"status\": \"active\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the applicant was created', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "const body = pm.response.json();",
+                  "pm.test('it came back with the identity this run asked for', function () {",
+                  "    pm.expect(body.applicantId).to.be.a('string').that.is.not.empty;",
+                  "    pm.expect(body.studentId).to.eql(pm.collectionVariables.get('bannedStudentId'));",
+                  "    pm.expect(body.status).to.eql('active');",
+                  "});",
+                  "// Moderation is asked about this id below. It is a UUID the service assigns,",
+                  "// never one the collection picks, so it has to be captured here.",
+                  "pm.collectionVariables.set('bannedApplicant', body.applicantId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Give the banned applicant a record with a previous ban",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{recordUrl}}/records",
+              "host": ["{{recordUrl}}"],
+              "path": ["records"]
+            },
+            "description": "previouslyBanned is the field Moderation reads, spelled in camelCase as the contract's Shared Enumerations give it. Spelled any other way the record is still created and the ban simply never counts.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"applicantId\": \"{{bannedApplicant}}\",\n    \"name\": \"Postman Banned Student\",\n    \"studentId\": \"{{bannedStudentId}}\",\n    \"role\": \"student_faf\",\n    \"university\": \"Technical University of Moldova\",\n    \"faculty\": \"FCIM\",\n    \"program\": \"Software Engineering\",\n    \"studyYear\": 3,\n    \"status\": \"active\",\n    \"averageGrade\": 9.1,\n    \"previouslyBanned\": true,\n    \"isEnrolled\": true\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the university record was created', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "pm.test('the record carries the previous ban', function () {",
+                  "    pm.expect(pm.response.json().previouslyBanned).to.be.true;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Issue the banned applicant an honest credential",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{credentialUrl}}/credentials/{{bannedApplicant}}",
+              "host": ["{{credentialUrl}}"],
+              "path": ["credentials", "{{bannedApplicant}}"]
+            },
+            "description": "An honest credential, so the record's ban is the only thing against them.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"scenario\": \"honest\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the credential was issued', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});",
+                  "pm.test('it is an honest credential', function () {",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.valid).to.be.true;",
+                  "    pm.expect(body.issues).to.be.an('array').that.is.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "Health",
       "item": [
         {
@@ -98,7 +568,11 @@
           "request": {
             "method": "GET",
             "header": [],
-            "url": { "raw": "{{baseUrl}}/status", "host": ["{{baseUrl}}"], "path": ["status"] },
+            "url": {
+              "raw": "{{baseUrl}}/status",
+              "host": ["{{baseUrl}}"],
+              "path": ["status"]
+            },
             "description": "Reports whether the service is up and whether it can reach PostgreSQL."
           },
           "event": [
@@ -127,7 +601,12 @@
           "name": "Accept a clean student (a correct call)",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n    \"sessionId\": \"{{sessionId}}\",\n    \"applicantId\": \"{{cleanApplicant}}\",\n    \"decision\": \"accept\",\n    \"decidedBy\": \"{{moderatorId}}\"\n}"
@@ -180,7 +659,7 @@
                   "pm.test('every dependency reports how it answered', function () {",
                   "    pm.expect(Object.keys(body.sources)).to.have.lengthOf(4);",
                   "    Object.values(body.sources).forEach(function (source) {",
-                  "        pm.expect(['live', 'simulated']).to.include(source);",
+                  "        pm.expect(source).to.eql('live');",
                   "    });",
                   "});",
                   "pm.collectionVariables.set('throwawayDecisionId', body.decisionId);"
@@ -193,7 +672,12 @@
           "name": "Decide on the same applicant twice",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n    \"sessionId\": \"{{sessionId}}\",\n    \"applicantId\": \"{{cleanApplicant}}\",\n    \"decision\": \"reject\",\n    \"decidedBy\": \"{{moderatorId}}\"\n}"
@@ -226,7 +710,12 @@
           "name": "Accept a forged student ID (a wrong call)",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n    \"sessionId\": \"{{sessionId}}\",\n    \"applicantId\": \"{{forgedApplicant}}\",\n    \"decision\": \"accept\",\n    \"decidedBy\": \"{{moderatorId}}\"\n}"
@@ -267,7 +756,7 @@
                   "pm.test('every dependency reports how it answered', function () {",
                   "    pm.expect(Object.keys(body.sources)).to.have.lengthOf(4);",
                   "    Object.values(body.sources).forEach(function (source) {",
-                  "        pm.expect(['live', 'simulated']).to.include(source);",
+                  "        pm.expect(source).to.eql('live');",
                   "    });",
                   "});"
                 ]
@@ -279,7 +768,12 @@
           "name": "Flag an applicant who should be banned",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n    \"sessionId\": \"{{sessionId}}\",\n    \"applicantId\": \"{{bannedApplicant}}\",\n    \"decision\": \"flag\",\n    \"decidedBy\": \"{{moderatorId}}\"\n}"
@@ -320,7 +814,7 @@
                   "pm.test('every dependency reports how it answered', function () {",
                   "    pm.expect(Object.keys(body.sources)).to.have.lengthOf(4);",
                   "    Object.values(body.sources).forEach(function (source) {",
-                  "        pm.expect(['live', 'simulated']).to.include(source);",
+                  "        pm.expect(source).to.eql('live');",
                   "    });",
                   "});",
                   "pm.collectionVariables.set('decisionId', body.decisionId);"
@@ -333,7 +827,12 @@
           "name": "Reject an unknown decision word",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n    \"sessionId\": \"{{sessionId}}\",\n    \"applicantId\": \"applicant-9999\",\n    \"decision\": \"kick\"\n}"
@@ -426,7 +925,12 @@
           "name": "Revise the call to a ban",
           "request": {
             "method": "PATCH",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n    \"decision\": \"ban\",\n    \"decidedBy\": \"{{moderatorId}}\"\n}"
@@ -470,7 +974,7 @@
                   "pm.test('every dependency reports how it answered', function () {",
                   "    pm.expect(Object.keys(body.sources)).to.have.lengthOf(4);",
                   "    Object.values(body.sources).forEach(function (source) {",
-                  "        pm.expect(['live', 'simulated']).to.include(source);",
+                  "        pm.expect(source).to.eql('live');",
                   "    });",
                   "});",
                   "pm.test('the decision kept its id and records when it changed', function () {",
@@ -528,8 +1032,14 @@
               "host": ["{{baseUrl}}"],
               "path": ["sessions", "{{sessionId}}", "decisions"],
               "query": [
-                { "key": "applicantId", "value": "{{forgedApplicant}}" },
-                { "key": "limit", "value": "10" }
+                {
+                  "key": "applicantId",
+                  "value": "{{forgedApplicant}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                }
               ]
             }
           },
@@ -559,7 +1069,12 @@
               "raw": "{{baseUrl}}/sessions/{{sessionId}}/decisions?limit=0",
               "host": ["{{baseUrl}}"],
               "path": ["sessions", "{{sessionId}}", "decisions"],
-              "query": [{ "key": "limit", "value": "0" }]
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "0"
+                }
+              ]
             }
           },
           "event": [
@@ -661,6 +1176,162 @@
                 "exec": [
                   "pm.test('a decision can only be deleted once', function () {",
                   "    pm.response.to.have.status(404);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete the clean applicant's university record",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{recordUrl}}/records/{{cleanApplicant}}",
+              "host": ["{{recordUrl}}"],
+              "path": ["records", "{{cleanApplicant}}"]
+            },
+            "description": "Removes what Setup created, so the records do not pile up over runs."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the record is deleted', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete the forged applicant's university record",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{recordUrl}}/records/{{forgedApplicant}}",
+              "host": ["{{recordUrl}}"],
+              "path": ["records", "{{forgedApplicant}}"]
+            },
+            "description": "Removes what Setup created, so the records do not pile up over runs."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the record is deleted', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete the banned applicant's university record",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{recordUrl}}/records/{{bannedApplicant}}",
+              "host": ["{{recordUrl}}"],
+              "path": ["records", "{{bannedApplicant}}"]
+            },
+            "description": "Removes what Setup created, so the records do not pile up over runs."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the record is deleted', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete the clean applicant",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{applicantUrl}}/applicants/{{cleanApplicant}}",
+              "host": ["{{applicantUrl}}"],
+              "path": ["applicants", "{{cleanApplicant}}"]
+            },
+            "description": "The credential issued for this applicant is left behind: Credential Service has no delete endpoint, and a credential whose applicant is gone is unreachable anyway."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the applicant is deleted', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete the forged applicant",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{applicantUrl}}/applicants/{{forgedApplicant}}",
+              "host": ["{{applicantUrl}}"],
+              "path": ["applicants", "{{forgedApplicant}}"]
+            },
+            "description": "The credential issued for this applicant is left behind: Credential Service has no delete endpoint, and a credential whose applicant is gone is unreachable anyway."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the applicant is deleted', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete the banned applicant",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{applicantUrl}}/applicants/{{bannedApplicant}}",
+              "host": ["{{applicantUrl}}"],
+              "path": ["applicants", "{{bannedApplicant}}"]
+            },
+            "description": "The credential issued for this applicant is left behind: Credential Service has no delete endpoint, and a credential whose applicant is gone is unreachable anyway."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the applicant is deleted', function () {",
+                  "    pm.response.to.have.status(200);",
                   "});"
                 ]
               }
