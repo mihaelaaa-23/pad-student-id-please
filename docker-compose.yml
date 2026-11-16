@@ -496,7 +496,7 @@ services:
 
   # ==================== University Record Service (Ion) ====================
   university-record-service:
-    image: ion190/university-record-service:4.0.0-rc.2
+    image: ion190/university-record-service:4.0.0
     restart: unless-stopped
     deploy:
       replicas: ${UNIVERSITY_RECORD_REPLICAS:-2}
