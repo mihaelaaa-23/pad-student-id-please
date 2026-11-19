@@ -43,3 +43,11 @@
 	path = services/message-broker
 	url = https://github.com/mihaelaaa-23/message-broker.git
 	branch = dev
+[submodule "services/etl-service"]
+	path = services/etl-service
+	url = https://github.com/mihaelaaa-23/etl-service.git
+	branch = dev
+[submodule "infra/postgres-ha"]
+	path = infra/postgres-ha
+	url = https://github.com/mihaelaaa-23/postgres-ha.git
+	branch = dev
