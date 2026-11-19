@@ -677,7 +677,7 @@ How the services talk to each other through the Message Broker: request/response
   | University Record | `university_record.v1.UniversityRecordService` | `GetRecord` | Session, Applicant, Server Rules, Moderation |
   | Session | `session.v1.SessionService` | `GetSession` | Discord DMs |
 
-  Player, Moderation and Discord DMs have no RPCs of their own: Session's XP award and Moderation's verdict announcement become events (below), and nothing calls Moderation. Every service that subscribes to a topic also serves `events.v1.EventSink/Deliver`.
+  Player, Moderation and Discord DMs have no RPCs of their own: Session's XP award and Moderation's verdict announcement become events (below), and nothing calls Moderation. Every service that subscribes to a topic also serves `events.v1.EventSink/Deliver`. Since Lab 5, Moderation, Session and Player also serve `tx.v1.Participant`, and Applicant, Credential and University Record serve `tx.v1.SagaParticipant` (see Transactions below).
 - **One address for every call.** A caller uses the generated client of the callee's proto, but connects it to the Broker (`BROKER_GRPC_URL`, `message-broker:50011`), never to the callee. The Broker reads the full method name (`/applicant.v1.ApplicantService/GetApplicant`), maps the package to the service (`applicant.v1` → `applicant-service`, the map is in `proto/broker/v1/broker.proto`), picks a healthy instance by its `grpcUrl` from Service Discovery, applies the circuit breaker and forwards the request bytes unchanged. Adding an RPC therefore needs no change in the Broker.
 - **Metadata.** Every call sends `x-request-id` (the request id), `authorization: Bearer <SERVICE_TOKEN>` and `x-caller-type: service`, and a deadline set to the caller's `HTTP_TIMEOUT_MS`. As over HTTP, the Broker checks the token and does not forward `authorization` to the service. The deadline replaces `X-Timeout-Ms`, with the same 200 ms margin: the Broker gives the instance the remaining time minus 200 ms, so its own `DEADLINE_EXCEEDED` with the instance's `x-instance-id` reaches the caller before the caller's deadline fires. A call with less than 200 ms left gets the Broker's `DEADLINE_EXCEEDED` at once, without being forwarded. The Broker adds `x-instance-id` to the trailing metadata of every answer, as `X-Instance-Id` on HTTP.
 - **Rerouting.** A gRPC call is sent to another instance only when the first could not be connected to at all (refused, unreachable, no DNS name): it never got the request, so this holds for any RPC. Once the request was sent (an error, a broken connection, a timeout), the Broker cannot tell whether the RPC is safe to repeat (`GenerateApplicant` is not), so it is never sent twice. Stricter than HTTP, where an idempotent method is also rerouted after a counted `5xx` (Message Broker, "Load balancing and rerouting").
@@ -726,6 +726,61 @@ How the services talk to each other through the Message Broker: request/response
 - **Delivery.** The Broker pushes each event to **one** healthy instance of **each** subscribing service, chosen like any other call, so two replicas of Player never both award the same XP. Delivery is **at-least-once**: an event can arrive again after a Broker restart or a lost acknowledgement, so every handler is idempotent. It stores the ids of the events it has processed in its own database and answers `Deliver` with `duplicate: true` for one it has already seen.
 - **Retries and the Dead Letter Channel (grade 9).** Events are queued in the Broker's own SQLite file on a named volume, and only removed once the subscriber has answered `OK`, so they survive a Broker restart. A delivery that fails with `UNAVAILABLE`, `DEADLINE_EXCEEDED`, `RESOURCE_EXHAUSTED` or `INTERNAL` is retried after `500 ms × 2^(attempt−1)` with jitter, capped at `30 s`, up to `MAX_DELIVERY_ATTEMPTS` (default `5`) attempts that reached an instance or tried to; while the subscriber has no healthy instance at all, the delivery waits without using an attempt, and is tried again once one appears; then it moves to the Dead Letter Channel with `reason: "max_attempts"`. `INVALID_ARGUMENT`, `FAILED_PRECONDITION`, `NOT_FOUND` and `UNIMPLEMENTED` cannot succeed on a retry, so the event moves there at once with `reason: "rejected"`. `GET /dead-letters` lists them.
 - **Ordering.** Events of one topic reach a subscriber in publishing order as long as nothing is retried; a retried event can arrive after a later one. No handler may depend on the order.
+
+#### Transactions (Lab 5, grades 8 and 9)
+
+Two features write to more than one database. A moderation decision runs as a **two-phase commit**. Applicant intake runs as a **long-running saga**. Both coordinators live in the Message Broker, which already has a durable SQLite log and a gRPC connection to every service. The contract is `proto/tx/v1/tx.proto`.
+
+- **Who serves what.**
+
+  | gRPC service | Served by | Called by |
+  |---|---|---|
+  | `tx.v1.Coordinator` (`RunTransaction`, `GetDecision`, `StartSaga`, `GetSaga`) | the Message Broker itself, on `message-broker:50011` (not forwarded) | Moderation (2PC), Applicant (saga), every 2PC participant (`GetDecision`) |
+  | `tx.v1.Participant` (`Prepare`, `Commit`, `Abort`) | Moderation (`50007`, new in Lab 5), Session (`50002`), Player (`50001`) | the Broker |
+  | `tx.v1.SagaParticipant` (`Execute`, `Compensate`) | Applicant (`50003`), Credential (`50004`), University Record (`50006`) | the Broker |
+
+  The Broker calls participants directly: it picks a healthy instance of the named service from Service Discovery by its `grpcUrl`, as it does for topic deliveries. `payload`, `context` and `output` are JSON. Every log line of this work carries `txId` or `sagaId` besides the usual fields.
+
+- **Two-phase commit (`RunTransaction`).**
+  1. The coordinator stores the transaction (`preparing`) and sends `Prepare` to every branch in parallel, with deadline `TX_PREPARE_TIMEOUT_MS` (`2000`).
+  2. A `yes: false`, a gRPC error or a timeout counts as a **NO**.
+  3. All YES: it stores `committed`, then sends `Commit` to every branch, retrying every `TX_COMMIT_RETRY_MS` (`1000`) until each acks. Any NO: it stores `aborted`, then sends `Abort` to every branch.
+  4. It answers the caller as soon as the outcome is stored.
+
+  A participant's `Prepare` runs `BEGIN`, its writes, `INSERT INTO applied_tx (tx_id)`, then `PREPARE TRANSACTION 'tx-<txId>-<service>'`, and answers `yes: true`. A business refusal is `yes: false` with `reason: "<CODE>: <message>"`, not a gRPC error. `Commit` runs `COMMIT PREPARED`. If that gid no longer exists and `applied_tx` holds the `txId`, it was already committed and the answer is `ok: true`. `Abort` runs `ROLLBACK PREPARED`; a gid that no longer exists is `ok: true`. Every participant database runs with `max_prepared_transactions = 64`.
+
+  **Recovery.**
+  - **Coordinator**: on start, `committed` and `aborted` transactions whose branches haven't all acked get their `Commit`/`Abort` sent again. A transaction still `preparing` has no outcome, so it is aborted.
+  - **Participant**: on start and every 30 s, it lists `pg_prepared_xacts` with gid `tx-%`. For each gid older than `TX_ORPHAN_AFTER_MS` (`60000`), it calls `GetDecision`, then commits or rolls back. `OUTCOME_UNSPECIFIED` means not decided yet, so it waits.
+
+- **Saga (`StartSaga`).**
+  - **Start.** The coordinator stores the saga and answers at once with `state: "running"`, or after up to `wait_ms` when it finishes sooner.
+  - **Steps.** It runs the steps in order, and each step's `output` is merged into `context`.
+  - **Retries.** `UNAVAILABLE`, `DEADLINE_EXCEEDED`, `RESOURCE_EXHAUSTED` and `INTERNAL` are retried after `500 ms × 2^(attempt−1)` with jitter, capped at `30 s`, up to `SAGA_STEP_MAX_ATTEMPTS` (`5`).
+  - **Compensation.** A business refusal (`FAILED_PRECONDITION`, `INVALID_ARGUMENT`, `NOT_FOUND`, `ALREADY_EXISTS`), or exhausted attempts, turns the saga to `compensating`. `Compensate` then runs on every `done` step in reverse order, retried until it succeeds, up to 20 attempts; after that the saga is `failed`.
+  - **States.** Saga: `running`, `compensating`, `completed`, `compensated`, `failed`. Step: `pending`, `running`, `done`, `failed`, `compensated`.
+  - **Idempotency.** Saga participants are idempotent by `(sagaId, step)`: `Execute` run twice returns the same `output`, and `Compensate` on something already compensated, or never created, succeeds.
+  - **Restart.** A Broker restart resumes every `running` or `compensating` saga from its last stored step.
+
+- **The two flows.**
+
+  | Flow | Initiator | Branches (2PC) or steps (saga): service, action, payload |
+  |---|---|---|
+  | 2PC `moderation.decision` | Moderation, on `POST /moderation/decide` | 1. `moderation-service`, `moderation.record_decision`, the full decision (`decisionId`, `sessionId`, `applicantId`, `decision`, `expectedDecision`, `correct`, `violatedRules`, `penalty`, `decidedBy`). 2. `session-service`, `session.apply_decision`, `{sessionId, decisionId, correct, scoreDelta, penalty}`, with `scoreDelta = correct ? 10 : -penalty`. 3. Only when `decidedBy` is set: `player-service`, `player.apply_xp`, `{playerId: decidedBy, xpDelta, reason: "decision:<decisionId>", decisionId}`, with `xpDelta = correct ? 5 : -2` (XP never drops below 0) |
+  | Saga `applicant.intake` | Applicant, on `POST /applicants/intake` | 1. `applicant-service`, `applicant.create`: in `{seed?, scenario?}`, out `{applicantId, applicant: {name, studentId, major, year, role, status}}`; compensation deletes the applicant. 2. `credential-service`, `credential.issue`: in `applicantId`, `applicant`, out `{credentialValid, credentialIssues}`; compensation deletes the credential. 3. `university-record-service`, `record.create`: in `applicantId`, `applicant`, out `{recordCreated: true}`; compensation deletes the record |
+
+  Why two mechanisms: all three decision databases are PostgreSQL, which can hold a transaction prepared until the coordinator decides. Applicant and Credential are MongoDB, which has no prepared transactions, so intake uses local transactions with compensations instead.
+
+- **Test hook (saga demo only).** When the context has `simulateFailAt: "<service name>"` and that service runs with `ENABLE_TEST_HOOKS=true`, its `Execute` answers `FAILED_PRECONDITION` with `x-error-code: SIMULATED_FAILURE`. Without the variable the field is ignored.
+
+- **Error codes.**
+
+  | Code | HTTP | gRPC | Meaning |
+  |---|---|---|---|
+  | `TX_ABORTED` | `409` | — | a 2PC was aborted; `details` lists the votes |
+  | `TX_COORDINATOR_UNAVAILABLE` | `503` | — | the Broker's coordinator could not be reached |
+  | `SAGA_NOT_FOUND` | `404` | `NOT_FOUND` | unknown saga id |
+  | `SIMULATED_FAILURE` | — | `FAILED_PRECONDITION` | test hook only |
 
 #### Decisions for Lab 4
 
