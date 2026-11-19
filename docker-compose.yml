@@ -686,6 +686,26 @@ services:
       timeout: 5s
       retries: 5
 
+  # ==================== Data Warehouse (Mihaela, Lab 5) ====================
+  # Lab 5, grade 4: the analytics database, filled by the etl job from every service's
+  # database (db/warehouse/init.sql holds the star schema). Not published, and not
+  # replicated: everything in it can be rebuilt from the service databases.
+  warehouse-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${WAREHOUSE_DB_USER}
+      POSTGRES_PASSWORD: ${WAREHOUSE_DB_PASSWORD}
+      POSTGRES_DB: ${WAREHOUSE_DB_NAME}
+    volumes:
+      - warehouse_db_data:/var/lib/postgresql/data
+      - ./db/warehouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${WAREHOUSE_DB_USER} -d ${WAREHOUSE_DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
 volumes:
   alloy_data:
   broker_data:
@@ -700,3 +720,4 @@ volumes:
   university_record_db_data:
   moderation_db_data:
   discord_dms_db_data:
+  warehouse_db_data:
