@@ -706,6 +706,64 @@ services:
       timeout: 5s
       retries: 5
 
+  # ==================== ETL (Mihaela, Lab 5) ====================
+  # Lab 5, grade 4: the job that copies every service database into warehouse-db,
+  # every ETL_INTERVAL_S seconds (etl/etl.py; one pass with `python etl.py --once`).
+  # It reads with each service's own database user but over read-only sessions
+  # (PostgreSQL) or from a secondary (MongoDB), so it can never change a source.
+  # A plain python image with the script mounted: no image of our own to build.
+  etl:
+    image: python:3.12-slim
+    restart: unless-stopped
+    working_dir: /etl
+    command: ["sh", "-c", "pip install --quiet --no-cache-dir --root-user-action=ignore -r requirements.txt && exec python etl.py"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      ETL_INTERVAL_S: ${ETL_INTERVAL_S:-60}
+      LOG_LEVEL: ${ETL_LOG_LEVEL:-INFO}
+      WAREHOUSE_DB_HOST: warehouse-db
+      WAREHOUSE_DB_USER: ${WAREHOUSE_DB_USER}
+      WAREHOUSE_DB_PASSWORD: ${WAREHOUSE_DB_PASSWORD}
+      WAREHOUSE_DB_NAME: ${WAREHOUSE_DB_NAME}
+      PLAYER_DB_HOST: player-db
+      PLAYER_DB_USER: ${PLAYER_DB_USER}
+      PLAYER_DB_PASSWORD: ${PLAYER_DB_PASSWORD}
+      PLAYER_DB_NAME: ${PLAYER_DB_NAME}
+      SESSION_DB_HOST: session-db
+      SESSION_DB_USER: ${SESSION_DB_USER}
+      SESSION_DB_PASSWORD: ${SESSION_DB_PASSWORD}
+      SESSION_DB_NAME: ${SESSION_DB_NAME}
+      UNIVERSITY_RECORD_DB_HOST: university-record-db
+      UNIVERSITY_RECORD_DB_USER: ${UNIVERSITY_RECORD_DB_USER}
+      UNIVERSITY_RECORD_DB_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
+      UNIVERSITY_RECORD_DB_NAME: ${UNIVERSITY_RECORD_DB_NAME}
+      MODERATION_DB_HOST: moderation-db
+      MODERATION_DB_USER: ${MODERATION_DB_USER}
+      MODERATION_DB_PASSWORD: ${MODERATION_DB_PASSWORD}
+      MODERATION_DB_NAME: ${MODERATION_DB_NAME}
+      APPLICANT_DB_HOSTS: applicant-db:27017
+      APPLICANT_DB_USER: ${APPLICANT_DB_USER}
+      APPLICANT_DB_PASSWORD: ${APPLICANT_DB_PASSWORD}
+      APPLICANT_DB_NAME: ${APPLICANT_DB_NAME}
+      CREDENTIAL_DB_HOSTS: credential-db:27017
+      CREDENTIAL_DB_USER: ${CREDENTIAL_DB_USER}
+      CREDENTIAL_DB_PASSWORD: ${CREDENTIAL_DB_PASSWORD}
+      CREDENTIAL_DB_NAME: ${CREDENTIAL_DB_NAME}
+      RULES_DB_HOSTS: rules-db:27017
+      RULES_DB_USER: ${RULES_DB_USER}
+      RULES_DB_PASSWORD: ${RULES_DB_PASSWORD}
+      RULES_DB_NAME: ${RULES_DB_NAME}
+      DISCORD_DMS_DB_HOSTS: discord-dms-db:27017
+      DISCORD_DMS_DB_USER: ${DISCORD_DMS_DB_USER}
+      DISCORD_DMS_DB_PASSWORD: ${DISCORD_DMS_DB_PASSWORD}
+      DISCORD_DMS_DB_NAME: ${DISCORD_DMS_DB_NAME}
+    volumes:
+      - ./etl:/etl:ro
+    depends_on:
+      warehouse-db:
+        condition: service_healthy
+
 volumes:
   alloy_data:
   broker_data:
