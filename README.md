@@ -761,6 +761,7 @@ Two features write to more than one database. A moderation decision runs as a **
   - **States.** Saga: `running`, `compensating`, `completed`, `compensated`, `failed`. Step: `pending`, `running`, `done`, `failed`, `compensated`.
   - **Idempotency.** Saga participants are idempotent by `(sagaId, step)`: `Execute` run twice returns the same `output`, and `Compensate` on something already compensated, or never created, succeeds.
   - **Restart.** A Broker restart resumes every `running` or `compensating` saga from its last stored step.
+  - **No ground truth to callers.** The saga `context` may hold the applicant's `scenario`, but it is never returned to a caller: Applicant removes it from `context` in every intake answer, like every other answer that carries an applicant.
 
 - **The two flows.**
 
