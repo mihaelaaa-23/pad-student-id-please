@@ -224,6 +224,9 @@ services:
 
   player-db:
     image: postgres:16-alpine
+    # Lab 5, grade 8: these databases take part in the two-phase commit, which
+    # needs prepared transactions (PostgreSQL's default is 0, i.e. disabled).
+    command: ["postgres", "-c", "max_prepared_transactions=64"]
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${PLAYER_DB_USER}
@@ -298,6 +301,9 @@ services:
 
   session-db:
     image: postgres:16-alpine
+    # Lab 5, grade 8: these databases take part in the two-phase commit, which
+    # needs prepared transactions (PostgreSQL's default is 0, i.e. disabled).
+    command: ["postgres", "-c", "max_prepared_transactions=64"]
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${SESSION_DB_USER}
@@ -595,6 +601,9 @@ services:
 
   moderation-db:
     image: postgres:16-alpine
+    # Lab 5, grade 8: these databases take part in the two-phase commit, which
+    # needs prepared transactions (PostgreSQL's default is 0, i.e. disabled).
+    command: ["postgres", "-c", "max_prepared_transactions=64"]
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${MODERATION_DB_USER}
