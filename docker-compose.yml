@@ -470,7 +470,7 @@ services:
 
   # ==================== Applicant Service (Ciprian) ====================
   applicant-service:
-    image: ciprik13/applicant-service:4.0.0
+    image: ciprik13/applicant-service:5.0.0-rc.1
     restart: unless-stopped
     # Lab 3, grade 5: two instances, sharing applicant-db (STORE_DRIVER mongo).
     deploy:
@@ -538,7 +538,7 @@ services:
 
   # ==================== Credential Service (Ciprian) ====================
   credential-service:
-    image: ciprik13/credential-service:4.0.0
+    image: ciprik13/credential-service:5.0.0-rc.1
     restart: unless-stopped
     # Lab 3, grade 5: two instances, sharing credential-db (STORE_DRIVER mongo).
     deploy:
