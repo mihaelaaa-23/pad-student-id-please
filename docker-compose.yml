@@ -36,6 +36,16 @@ services:
       DISCORD_DMS_WS_PUBLIC_URL: ws://localhost:3008
       # Lab 4, grade 4: GET /logs/download reads the logs of every container from Loki.
       LOKI_URL: http://loki:3100
+      # Lab 5, grades 6-7: GET-response and auth cache over cache-1..3, keys spread by
+      # the Gateway's consistent-hash ring. Fail open: an unreachable node is a MISS,
+      # so the Gateway does not depend_on the cache nodes.
+      CACHE_ENABLED: ${CACHE_ENABLED:-true}
+      CACHE_NODES: cache-1:6379,cache-2:6379,cache-3:6379
+      CACHE_VNODES: ${CACHE_VNODES:-160}
+      CACHE_TIMEOUT_MS: ${CACHE_TIMEOUT_MS:-50}
+      CACHE_NODE_FAILURES_TO_EJECT: ${CACHE_NODE_FAILURES_TO_EJECT:-3}
+      CACHE_NODE_RETRY_S: ${CACHE_NODE_RETRY_S:-10}
+      AUTH_CACHE_TTL_S: ${AUTH_CACHE_TTL_S:-60}
     # service_started, not service_healthy: with no list from Service Discovery the Gateway
     # routes to the fixed upstreams above, so Service Discovery failing to start does not
     # take down the only entry point.
@@ -44,6 +54,40 @@ services:
         condition: service_started
       message-broker:
         condition: service_started
+
+  # ==================== Cache (Ciprian) ====================
+  # Lab 5, grades 6-7: three standalone Valkey nodes, sharded by the Gateway's own
+  # consistent-hash ring (not Redis Cluster). Pure cache: no persistence, LRU eviction
+  # at 64 MB, so a restarted node comes back empty and refills on misses. Not published.
+  cache-1:
+    image: valkey/valkey:8.0-alpine
+    restart: unless-stopped
+    command: ["valkey-server", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  cache-2:
+    image: valkey/valkey:8.0-alpine
+    restart: unless-stopped
+    command: ["valkey-server", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  cache-3:
+    image: valkey/valkey:8.0-alpine
+    restart: unless-stopped
+    command: ["valkey-server", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   # ==================== Service Discovery (Ciprian) ====================
   # Internal registry; no host port is published. This image defines its own
@@ -188,8 +232,10 @@ services:
     # at http://localhost:3000/player.
     environment:
       PORT: 3001
-      DB_HOST: player-db
-      DB_PORT: 5432
+      # Lab 5, grade 5: player-db is a 3-node Spilo cluster; pg-router:5401 always
+      # forwards to its current leader, so the service code is unchanged.
+      DB_HOST: pg-router
+      DB_PORT: 5401
       DB_USER: ${PLAYER_DB_USER}
       DB_PASSWORD: ${PLAYER_DB_PASSWORD}
       DB_NAME: ${PLAYER_DB_NAME}
@@ -217,26 +263,133 @@ services:
       GRPC_PORT: 50001
       SD_TOPICS: session.ended
     depends_on:
-      player-db:
+      player-db-init:
+        condition: service_completed_successfully
+      pg-router:
         condition: service_healthy
       service-discovery:
         condition: service_started
 
-  player-db:
-    image: postgres:16-alpine
+  # ==================== PostgreSQL replication (Ciprian) ====================
+  # Lab 5, grade 5. One etcd holds each cluster's leader key; Patroni (inside Spilo)
+  # elects the leader through it and fails over when the leader stops renewing the key.
+  # One etcd node only coordinates failover: losing it stops failover, not the
+  # databases (a known limit, written in the README).
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.17
     restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${PLAYER_DB_USER}
-      POSTGRES_PASSWORD: ${PLAYER_DB_PASSWORD}
-      POSTGRES_DB: ${PLAYER_DB_NAME}
+    command:
+      - etcd
+      - --name=etcd
+      - --data-dir=/etcd-data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://etcd:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd:2380
+      - --initial-cluster=etcd=http://etcd:2380
+      - --initial-cluster-state=new
     volumes:
-      - player_db_data:/var/lib/postgresql/data
-      - ./db/player-service/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - etcd_data:/etcd-data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${PLAYER_DB_USER} -d ${PLAYER_DB_NAME}"]
+      test: ["CMD", "etcdctl", "--endpoints=http://localhost:2379", "endpoint", "health"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+
+  # The single address of every PostgreSQL cluster: 540x = leader (read-write),
+  # 550x = replicas (read-only, for the ETL), 8404 = stats. Routes by Patroni's REST
+  # API (GET /primary, GET /replica on 8008); see infra/pg-router/haproxy.cfg.
+  pg-router:
+    image: haproxy:3.0-alpine
+    restart: unless-stopped
+    volumes:
+      - ./infra/pg-router/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8404/ || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # player-db: three Spilo nodes (Patroni + PostgreSQL 16), one leader and two
+  # streaming replicas. The template for the other clusters: copy the three nodes and
+  # the -init job, then change SCOPE, the hostnames, the volumes, the init.sql mount,
+  # PGPORT of the -init job and the APP_DB_* values.
+  player-db-1: &player-db
+    image: ghcr.io/zalando/spilo-16:3.3-p1
+    restart: unless-stopped
+    hostname: player-db-1
+    environment:
+      SCOPE: player-db
+      PGVERSION: "16"
+      ETCD3_HOST: etcd:2379
+      SPILO_PROVIDER: local
+      PGPASSWORD_SUPERUSER: ${PG_SUPERUSER_PASSWORD:?set PG_SUPERUSER_PASSWORD in .env, see .env.example}
+      PGPASSWORD_ADMIN: ${PG_ADMIN_PASSWORD:?set PG_ADMIN_PASSWORD in .env, see .env.example}
+      PGPASSWORD_STANDBY: ${PG_REPLICATION_PASSWORD:?set PG_REPLICATION_PASSWORD in .env, see .env.example}
+      ALLOW_NOSSL: "true"
+      # Patroni settings on top of Spilo's defaults. shared_buffers is pinned because
+      # Spilo sizes it from the machine's memory, and up to 12 nodes share one laptop.
+      # session-db and moderation-db also need 2PC here:
+      #   bootstrap: {dcs: {postgresql: {parameters: {max_prepared_transactions: 64}}}}
+      #   postgresql: {parameters: {shared_buffers: 128MB, max_prepared_transactions: 64}}
+      SPILO_CONFIGURATION: |
+        postgresql:
+          parameters:
+            shared_buffers: 128MB
+    volumes:
+      - player_db_1_data:/home/postgres/pgdata
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8008/health', timeout=2)"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    depends_on:
+      etcd:
+        condition: service_healthy
+
+  player-db-2:
+    <<: *player-db
+    hostname: player-db-2
+    volumes:
+      - player_db_2_data:/home/postgres/pgdata
+
+  player-db-3:
+    <<: *player-db
+    hostname: player-db-3
+    volumes:
+      - player_db_3_data:/home/postgres/pgdata
+
+  # Spilo bootstraps PostgreSQL itself, so /docker-entrypoint-initdb.d never runs.
+  # This one-shot job creates the app role and database, runs init.sql once (only
+  # when it creates the database) and creates etl_reader, through the leader port.
+  # Idempotent: it runs on every `up` and exits 0.
+  player-db-init:
+    image: postgres:16-alpine
+    restart: "no"
+    command: ["sh", "/init-app-db.sh"]
+    environment:
+      SERVICE_NAME: player-db-init
+      PGHOST: pg-router
+      PGPORT: 5401
+      PGUSER: postgres
+      PGPASSWORD: ${PG_SUPERUSER_PASSWORD:?set PG_SUPERUSER_PASSWORD in .env, see .env.example}
+      APP_DB_USER: ${PLAYER_DB_USER}
+      APP_DB_PASSWORD: ${PLAYER_DB_PASSWORD}
+      APP_DB_NAME: ${PLAYER_DB_NAME}
+      ETL_READER_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
+    volumes:
+      - ./db/postgres-ha/init-app-db.sh:/init-app-db.sh:ro
+      - ./db/player-service/init.sql:/init-sql/init.sql:ro
+    depends_on:
+      pg-router:
+        condition: service_healthy
+      player-db-1:
+        condition: service_healthy
+      player-db-2:
+        condition: service_healthy
+      player-db-3:
+        condition: service_healthy
 
   # ==================== Server Moderation Session Service (Mihaela) ====================
   session-service:
@@ -729,7 +882,9 @@ services:
       WAREHOUSE_DB_USER: ${WAREHOUSE_DB_USER}
       WAREHOUSE_DB_PASSWORD: ${WAREHOUSE_DB_PASSWORD}
       WAREHOUSE_DB_NAME: ${WAREHOUSE_DB_NAME}
-      PLAYER_DB_HOST: player-db
+      # player-db is a Spilo cluster since #226: read a replica through pg-router.
+      PLAYER_DB_HOST: pg-router
+      PLAYER_DB_PORT: "5501"
       PLAYER_DB_USER: ${PLAYER_DB_USER}
       PLAYER_DB_PASSWORD: ${PLAYER_DB_PASSWORD}
       PLAYER_DB_NAME: ${PLAYER_DB_NAME}
@@ -774,7 +929,10 @@ volumes:
   loki_data:
   prometheus_data:
   grafana_data:
-  player_db_data:
+  etcd_data:
+  player_db_1_data:
+  player_db_2_data:
+  player_db_3_data:
   session_db_data:
   applicant_db_data:
   credential_db_data:
