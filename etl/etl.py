@@ -6,8 +6,10 @@ the full current state, transforms it into the warehouse's star schema
 source, so a run can be repeated at any time without duplicates. Sources are read
 read-only: PostgreSQL sessions are opened with default_transaction_read_only, and
 MongoDB is read with readPreference=secondaryPreferred (a replica when there is one).
+Because every pass is a full snapshot, rows that a source no longer has are deleted
+from the warehouse in the same transaction (a compensated saga, a deleted decision).
 A source that is not configured is skipped; a source that fails does not stop the
-others, and the run is recorded as "partial".
+others (and deletes nothing), and the run is recorded as "partial".
 """
 
 import argparse
@@ -320,13 +322,24 @@ def upsert_sql(table, key, columns):
             f"ON CONFLICT ({', '.join(key)}) DO UPDATE SET {updates}, loaded_at = now()")
 
 
+def prune_sql(table, key):
+    """Deletes the rows whose key this pass did not see: the source no longer has them."""
+    if len(key) == 1:
+        return f"DELETE FROM {table} WHERE NOT ({key[0]}::text = ANY(%s::text[]))"
+    cols = ", ".join(f"{k}::text" for k in key)
+    arrays = ", ".join("%s::text[]" for _ in key)
+    return f"DELETE FROM {table} WHERE ({cols}) NOT IN (SELECT * FROM unnest({arrays}))"
+
+
 def load(wh, table, key, rows):
+    """Upserts the snapshot and removes what the source no longer has, in one transaction."""
     rows = dedupe([r for r in rows if all(r.get(k) is not None for k in key)], key)
-    if not rows:
-        return 0
     with wh.transaction(), wh.cursor() as cur:
-        cur.executemany(upsert_sql(table, key, list(rows[0].keys())), rows)
-    return len(rows)
+        if rows:
+            cur.executemany(upsert_sql(table, key, list(rows[0].keys())), rows)
+        cur.execute(prune_sql(table, key), [[str(r[k]) for r in rows] for k in key])
+        deleted = cur.rowcount
+    return len(rows), deleted
 
 
 # ---------- one run ----------
@@ -350,8 +363,8 @@ def run_source(wh, name, kind, prefix, extract, request_id):
             table, key, rows = extract(db)
         finally:
             client.close()
-    loaded = load(wh, table, key, rows)
-    result = {"status": "ok", "table": table, "extracted": len(rows), "loaded": loaded,
+    loaded, deleted = load(wh, table, key, rows)
+    result = {"status": "ok", "table": table, "extracted": len(rows), "loaded": loaded, "deleted": deleted,
               "durationMs": round((time.monotonic() - started) * 1000)}
     emit(logging.INFO, "etl source loaded", request_id, source=name, **result)
     return result
@@ -376,14 +389,21 @@ def run_once():
                 results[name] = {"status": "failed", "error": str(exc)}
                 emit(logging.ERROR, "etl source failed", request_id, source=name, error=str(exc))
         statuses = {r["status"] for r in results.values()}
-        status = "failed" if statuses == {"failed"} else "partial" if "failed" in statuses else "ok"
+        if statuses == {"skipped"}:
+            status = "skipped"
+            emit(logging.WARNING, "etl run loaded nothing: no source is configured", request_id)
+        elif "failed" in statuses:
+            status = "failed" if statuses == {"failed"} else "partial"
+        else:
+            status = "ok"
         with wh.cursor() as cur:
             cur.execute(
                 "INSERT INTO etl_run (started_at, finished_at, status, sources) VALUES (%s, now(), %s, %s)",
                 (started_at, status, json.dumps(results)),
             )
     emit(logging.INFO, "etl run finished", request_id, status=status,
-         loaded=sum(r.get("loaded", 0) for r in results.values()))
+         loaded=sum(r.get("loaded", 0) for r in results.values()),
+         deleted=sum(r.get("deleted", 0) for r in results.values()))
     return status != "failed"
 
 

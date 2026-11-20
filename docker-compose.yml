@@ -716,10 +716,13 @@ services:
     image: python:3.12-slim
     restart: unless-stopped
     working_dir: /etl
-    command: ["sh", "-c", "pip install --quiet --no-cache-dir --root-user-action=ignore -r requirements.txt && exec python etl.py"]
+    # etl/start.sh installs the packages into the etl_deps volume once (again only when
+    # requirements.txt changes), so restarts need no network.
+    command: ["sh", "start.sh"]
     environment:
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUNBUFFERED: "1"
+      PYTHONPATH: /deps
       ETL_INTERVAL_S: ${ETL_INTERVAL_S:-60}
       LOG_LEVEL: ${ETL_LOG_LEVEL:-INFO}
       WAREHOUSE_DB_HOST: warehouse-db
@@ -760,6 +763,7 @@ services:
       DISCORD_DMS_DB_NAME: ${DISCORD_DMS_DB_NAME}
     volumes:
       - ./etl:/etl:ro
+      - etl_deps:/deps
     depends_on:
       warehouse-db:
         condition: service_healthy
@@ -779,3 +783,4 @@ volumes:
   moderation_db_data:
   discord_dms_db_data:
   warehouse_db_data:
+  etl_deps:
