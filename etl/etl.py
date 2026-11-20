@@ -10,6 +10,8 @@ Because every pass is a full snapshot, rows that a source no longer has are dele
 from the warehouse in the same transaction (a compensated saga, a deleted decision).
 A source that is not configured is skipped; a source that fails does not stop the
 others (and deletes nothing), and the run is recorded as "partial".
+A source that answers but is empty (for example a Mongo replica still in its initial
+sync) empties its warehouse tables for that pass; the next pass refills them.
 """
 
 import argparse
