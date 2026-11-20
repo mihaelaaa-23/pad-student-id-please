@@ -885,8 +885,9 @@ services:
       # player-db is a Spilo cluster since #226: read a replica through pg-router.
       PLAYER_DB_HOST: pg-router
       PLAYER_DB_PORT: "5501"
-      PLAYER_DB_USER: ${PLAYER_DB_USER}
-      PLAYER_DB_PASSWORD: ${PLAYER_DB_PASSWORD}
+      # Lab 5: the read-only role player-db-init creates (SELECT only), not Player's own user.
+      PLAYER_DB_USER: etl_reader
+      PLAYER_DB_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
       PLAYER_DB_NAME: ${PLAYER_DB_NAME}
       SESSION_DB_HOST: session-db
       SESSION_DB_USER: ${SESSION_DB_USER}
