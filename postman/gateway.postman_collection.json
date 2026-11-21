@@ -1,9 +1,9 @@
 {
   "info": {
     "_postman_id": "b1e1b2b0-3333-4a1a-9c1a-gateway00001",
-    "name": "Gateway - Log Download",
+    "name": "Gateway - Log Download and Cache",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "description": "Lab 4, grade 4: GET /logs/download on the Gateway. Run with the service token:\nnpx newman run postman/gateway.postman_collection.json --env-var serviceToken=$SERVICE_TOKEN"
+    "description": "Lab 4, grade 4: GET /logs/download on the Gateway. Lab 5, grades 6 and 7: the response cache, the auth cache and the cache ring. Run with the service token:\nnpx newman run postman/gateway.postman_collection.json --env-var serviceToken=$SERVICE_TOKEN"
   },
   "auth": {
     "type": "bearer",
@@ -333,6 +333,536 @@
           ]
         }
       }
+    },
+    {
+      "name": "Cache (Lab 5)",
+      "description": "Lab 5, grade 6: response cache (MISS, HIT, caller scope, invalidation by version after PATCH, Cache-Control: no-cache) and the auth cache (cache_requests_total{kind=\"auth\",result=\"hit\"} grows). Assumes one Gateway instance, as in compose. Postman sends Cache-Control: no-cache by default (Settings > Send no-cache header), which the Gateway answers with BYPASS; the reads that should use the cache set Cache-Control: max-age=60 themselves.",
+      "item": [
+        {
+          "name": "Cache - Create Applicant",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('applicant created', function () { pm.response.to.have.status(201); });",
+                  "pm.collectionVariables.set('cacheApplicantId', pm.response.json().applicantId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gatewayUrl}}/applicant/applicants",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{serviceToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Cache Demo\",\n  \"studentId\": \"FCIM-239901\",\n  \"major\": \"Software Engineering\",\n  \"year\": 3,\n  \"role\": \"student_faf\",\n  \"status\": \"active\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Cache - First Read Is MISS",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('X-Cache is MISS', function () { pm.expect(pm.response.headers.get('X-Cache')).to.eql('MISS'); });",
+                  "pm.test('X-Cache-Node names a cache node', function () { pm.expect(pm.response.headers.get('X-Cache-Node')).to.match(/^cache-[1-3]$/); });",
+                  "pm.collectionVariables.set('cacheNode', pm.response.headers.get('X-Cache-Node'));",
+                  "pm.collectionVariables.set('cacheBody', pm.response.text());"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Cache-Control",
+                "value": "max-age=60"
+              }
+            ],
+            "url": "{{gatewayUrl}}/applicant/applicants/{{cacheApplicantId}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{serviceToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cache - Second Read Is HIT",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('X-Cache is HIT', function () { pm.expect(pm.response.headers.get('X-Cache')).to.eql('HIT'); });",
+                  "pm.test('served by the same node, the ring sends a key to one node', function () {",
+                  "  pm.expect(pm.response.headers.get('X-Cache-Node')).to.eql(pm.collectionVariables.get('cacheNode'));",
+                  "});",
+                  "pm.test('same body as the first read', function () {",
+                  "  pm.expect(pm.response.json()).to.eql(JSON.parse(pm.collectionVariables.get('cacheBody')));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Cache-Control",
+                "value": "max-age=60"
+              }
+            ],
+            "url": "{{gatewayUrl}}/applicant/applicants/{{cacheApplicantId}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{serviceToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cache - Auth Metrics Before",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "function authHits(text) {",
+                  "  const m = text.match(/^cache_requests_total\\{kind=\"auth\",result=\"hit\"\\} (\\d+)$/m);",
+                  "  return m ? Number(m[1]) : 0;",
+                  "}",
+                  "pm.collectionVariables.set('authHitsBefore', String(authHits(pm.response.text())));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gatewayUrl}}/metrics",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Cache - Player Read Is Its Own Entry",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('a player never gets the service-token entry: the caller is part of the key', function () {",
+                  "  pm.expect(pm.response.headers.get('X-Cache')).to.eql('MISS');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Cache-Control",
+                "value": "max-age=60"
+              }
+            ],
+            "url": "{{gatewayUrl}}/applicant/applicants/{{cacheApplicantId}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cache - Player Read Again Is HIT",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('X-Cache is HIT', function () { pm.expect(pm.response.headers.get('X-Cache')).to.eql('HIT'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Cache-Control",
+                "value": "max-age=60"
+              }
+            ],
+            "url": "{{gatewayUrl}}/applicant/applicants/{{cacheApplicantId}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cache - Auth Metrics After",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "function authHits(text) {",
+                  "  const m = text.match(/^cache_requests_total\\{kind=\"auth\",result=\"hit\"\\} (\\d+)$/m);",
+                  "  return m ? Number(m[1]) : 0;",
+                  "}",
+                  "pm.test('the player token was answered from the auth cache', function () {",
+                  "  pm.expect(authHits(pm.response.text())).to.be.above(Number(pm.collectionVariables.get('authHitsBefore')));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gatewayUrl}}/metrics",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Cache - Patch Applicant",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.collectionVariables.set('cacheMajor', pm.response.json().major);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{gatewayUrl}}/applicant/applicants/{{cacheApplicantId}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{serviceToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"major\": \"Cache Invalidation {{$timestamp}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Cache - Read After Patch Is MISS",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('X-Cache is MISS', function () { pm.expect(pm.response.headers.get('X-Cache')).to.eql('MISS'); });",
+                  "pm.test('the new value, not the cached one', function () {",
+                  "  pm.expect(pm.response.json().major).to.eql(pm.collectionVariables.get('cacheMajor'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Cache-Control",
+                "value": "max-age=60"
+              }
+            ],
+            "url": "{{gatewayUrl}}/applicant/applicants/{{cacheApplicantId}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{serviceToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cache - Read After Patch Again Is HIT",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('X-Cache is HIT', function () { pm.expect(pm.response.headers.get('X-Cache')).to.eql('HIT'); });",
+                  "pm.test('still the new value', function () {",
+                  "  pm.expect(pm.response.json().major).to.eql(pm.collectionVariables.get('cacheMajor'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Cache-Control",
+                "value": "max-age=60"
+              }
+            ],
+            "url": "{{gatewayUrl}}/applicant/applicants/{{cacheApplicantId}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{serviceToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cache - No-Cache Is BYPASS",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('X-Cache is BYPASS', function () { pm.expect(pm.response.headers.get('X-Cache')).to.eql('BYPASS'); });",
+                  "pm.test('no node: neither read nor stored', function () {",
+                  "  pm.expect(pm.response.headers.has('X-Cache-Node')).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Cache-Control",
+                "value": "no-cache"
+              }
+            ],
+            "url": "{{gatewayUrl}}/applicant/applicants/{{cacheApplicantId}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{serviceToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Cache Ring (Lab 5)",
+      "description": "Lab 5, grade 7: GET /cache/ring and /cache/ring/lookup, service token only.",
+      "item": [
+        {
+          "name": "Cache Ring - Three Nodes Up",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "const ring = pm.response.json();",
+                  "pm.test('160 virtual nodes per node', function () { pm.expect(ring.vnodes).to.eql(160); });",
+                  "pm.test('cache-1, cache-2 and cache-3, all up', function () {",
+                  "  pm.expect(ring.nodes.map(function (n) { return n.node; }).sort()).to.eql(['cache-1', 'cache-2', 'cache-3']);",
+                  "  ring.nodes.forEach(function (n) { pm.expect(n.state).to.eql('up'); });",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gatewayUrl}}/cache/ring",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{serviceToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cache Ring - Lookup A Key",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('the key and the node it lives on', function () {",
+                  "  pm.expect(pm.response.json().key).to.eql('applicant:demo');",
+                  "  pm.expect(pm.response.json().node).to.match(/^cache-[1-3]$/);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gatewayUrl}}/cache/ring/lookup?key=applicant:demo",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{serviceToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cache Ring - Player Token Refused",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 403', function () { pm.response.to.have.status(403); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gatewayUrl}}/cache/ring",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{token}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cache Ring - No Token",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 401', function () { pm.response.to.have.status(401); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{gatewayUrl}}/cache/ring",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        }
+      ]
     }
   ],
   "variable": [
@@ -358,6 +888,26 @@
     },
     {
       "key": "demoRequestId",
+      "value": ""
+    },
+    {
+      "key": "cacheApplicantId",
+      "value": ""
+    },
+    {
+      "key": "cacheNode",
+      "value": ""
+    },
+    {
+      "key": "cacheBody",
+      "value": ""
+    },
+    {
+      "key": "cacheMajor",
+      "value": ""
+    },
+    {
+      "key": "authHitsBefore",
       "value": ""
     }
   ]
