@@ -178,7 +178,7 @@ services:
 
   # ==================== Player Service (Mihaela) ====================
   player-service:
-    image: mihaela5/player-service:4.0.0-rc.2
+    image: mihaela5/player-service:4.0.0
     restart: unless-stopped
     # Lab 3, grade 5: two instances. Each registers its own container hostname with
     # Service Discovery, so there is no fixed host port and no container_name.
@@ -240,7 +240,7 @@ services:
 
   # ==================== Server Moderation Session Service (Mihaela) ====================
   session-service:
-    image: mihaela5/session-service:4.0.0-rc.5
+    image: mihaela5/session-service:4.0.0
     restart: unless-stopped
     # Lab 3, grade 5: two instances; sessions live in session-db, so any instance can
     # serve any session.
@@ -450,7 +450,7 @@ services:
 
   # ==================== Server Rules Service (Ion) ====================
   server-rules-service:
-    image: ion190/server-rules-service:4.0.0-rc.1
+    image: ion190/server-rules-service:4.0.1
     restart: unless-stopped
     deploy:
       replicas: ${RULES_REPLICAS:-2}
@@ -463,7 +463,7 @@ services:
       DB_USER: ${RULES_DB_USER}
       DB_PASSWORD: ${RULES_DB_PASSWORD}
       DB_NAME: ${RULES_DB_NAME}
-      UNIVERSITY_RECORD_SERVICE_URL: http://message-broker:3011/university-record
+      BROKER_GRPC_URL: message-broker:50011
       SERVICE_TOKEN: ${SERVICE_TOKEN:?set SERVICE_TOKEN in .env, see .env.example}
       TASK_TIMEOUT_MS: ${RULES_TASK_TIMEOUT_MS:-3000}
       MAX_CONCURRENT_TASKS: ${RULES_MAX_CONCURRENT_TASKS:-50}
@@ -496,7 +496,7 @@ services:
 
   # ==================== University Record Service (Ion) ====================
   university-record-service:
-    image: ion190/university-record-service:4.0.0-rc.2
+    image: ion190/university-record-service:4.0.0
     restart: unless-stopped
     deploy:
       replicas: ${UNIVERSITY_RECORD_REPLICAS:-2}
@@ -540,7 +540,7 @@ services:
 
   # ==================== Moderation Service (Liviu) ====================
   moderation-service:
-    image: d3adeye/moderation-service:4.0.0-rc.3
+    image: d3adeye/moderation-service:4.0.0
     restart: unless-stopped
     # Lab 3, grade 5: two instances. Each registers its own container hostname with
     # Service Discovery, so there is no fixed host port and no container_name. The
@@ -611,7 +611,7 @@ services:
 
   # ==================== Discord DMs Service (Liviu) ====================
   discord-dms-service:
-    image: d3adeye/discord-dms-service:4.0.0-rc.2
+    image: d3adeye/discord-dms-service:4.0.0
     restart: unless-stopped
     # One instance on purpose (Lab 3, grade 5): 3008 is published to the host, and a
     # message sent to one replica would not reach sockets connected to another.
