@@ -312,13 +312,14 @@ services:
 
   # player-db: three Spilo nodes (Patroni + PostgreSQL 16), one leader and two
   # streaming replicas. The template for the other clusters: copy the three nodes and
-  # the -init job, then change SCOPE, the hostnames, the volumes, the init.sql mount,
-  # PGPORT of the -init job and the APP_DB_* values.
+  # the -init job, then change SCOPE, the hostnames, both connect_address values in
+  # every node's SPILO_CONFIGURATION, the volumes, the init.sql mount, PGPORT of the
+  # -init job and the APP_DB_* values.
   player-db-1: &player-db
     image: ghcr.io/zalando/spilo-16:3.3-p1
     restart: unless-stopped
     hostname: player-db-1
-    environment:
+    environment: &player-db-env
       SCOPE: player-db
       PGVERSION: "16"
       ETCD3_HOST: etcd:2379
@@ -327,13 +328,25 @@ services:
       PGPASSWORD_ADMIN: ${PG_ADMIN_PASSWORD:?set PG_ADMIN_PASSWORD in .env, see .env.example}
       PGPASSWORD_STANDBY: ${PG_REPLICATION_PASSWORD:?set PG_REPLICATION_PASSWORD in .env, see .env.example}
       ALLOW_NOSSL: "true"
-      # Patroni settings on top of Spilo's defaults. shared_buffers is pinned because
-      # Spilo sizes it from the machine's memory, and up to 12 nodes share one laptop.
-      # session-db and moderation-db also need 2PC here:
+      # Patroni settings on top of Spilo's defaults, per node.
+      # connect_address: every node is advertised by its compose hostname, not its IP.
+      # Spilo writes the Patroni config once per container with the container's IP, and
+      # Docker can hand out a different IP after `docker compose stop` + `up`; a stale
+      # IP in etcd then points the members at the wrong container (even a node of
+      # another cluster), replicas stop streaming and no member gets promoted. DNS
+      # always resolves the hostname to the current IP. Spilo 3.3 passes no PATRONI_*
+      # env var to Patroni and has no env var for the PostgreSQL address, so it is set
+      # here; values in SPILO_CONFIGURATION win over Spilo's generated ones.
+      # shared_buffers is pinned because Spilo sizes it from the machine's memory, and
+      # up to 12 nodes share one laptop. session-db and moderation-db also need 2PC, so
+      # their blocks add, on every node:
       #   bootstrap: {dcs: {postgresql: {parameters: {max_prepared_transactions: 64}}}}
-      #   postgresql: {parameters: {shared_buffers: 128MB, max_prepared_transactions: 64}}
+      #   postgresql: {parameters: {max_prepared_transactions: 64}}
       SPILO_CONFIGURATION: |
+        restapi:
+          connect_address: player-db-1:8008
         postgresql:
+          connect_address: player-db-1:5432
           parameters:
             shared_buffers: 128MB
     volumes:
@@ -351,12 +364,30 @@ services:
   player-db-2:
     <<: *player-db
     hostname: player-db-2
+    environment:
+      <<: *player-db-env
+      SPILO_CONFIGURATION: |
+        restapi:
+          connect_address: player-db-2:8008
+        postgresql:
+          connect_address: player-db-2:5432
+          parameters:
+            shared_buffers: 128MB
     volumes:
       - player_db_2_data:/home/postgres/pgdata
 
   player-db-3:
     <<: *player-db
     hostname: player-db-3
+    environment:
+      <<: *player-db-env
+      SPILO_CONFIGURATION: |
+        restapi:
+          connect_address: player-db-3:8008
+        postgresql:
+          connect_address: player-db-3:5432
+          parameters:
+            shared_buffers: 128MB
     volumes:
       - player_db_3_data:/home/postgres/pgdata
 
@@ -685,7 +716,7 @@ services:
     image: ghcr.io/zalando/spilo-16:3.3-p1
     restart: unless-stopped
     hostname: university-record-db-1
-    environment:
+    environment: &university-record-db-env
       SCOPE: university-record-db
       PGVERSION: "16"
       ETCD3_HOST: etcd:2379
@@ -694,8 +725,12 @@ services:
       PGPASSWORD_ADMIN: ${PG_ADMIN_PASSWORD:?set PG_ADMIN_PASSWORD in .env, see .env.example}
       PGPASSWORD_STANDBY: ${PG_REPLICATION_PASSWORD:?set PG_REPLICATION_PASSWORD in .env, see .env.example}
       ALLOW_NOSSL: "true"
+      # Per node, advertised by hostname: see player-db-1.
       SPILO_CONFIGURATION: |
+        restapi:
+          connect_address: university-record-db-1:8008
         postgresql:
+          connect_address: university-record-db-1:5432
           parameters:
             shared_buffers: 128MB
     volumes:
@@ -713,12 +748,30 @@ services:
   university-record-db-2:
     <<: *university-record-db
     hostname: university-record-db-2
+    environment:
+      <<: *university-record-db-env
+      SPILO_CONFIGURATION: |
+        restapi:
+          connect_address: university-record-db-2:8008
+        postgresql:
+          connect_address: university-record-db-2:5432
+          parameters:
+            shared_buffers: 128MB
     volumes:
       - university_record_db_2_data:/home/postgres/pgdata
 
   university-record-db-3:
     <<: *university-record-db
     hostname: university-record-db-3
+    environment:
+      <<: *university-record-db-env
+      SPILO_CONFIGURATION: |
+        restapi:
+          connect_address: university-record-db-3:8008
+        postgresql:
+          connect_address: university-record-db-3:5432
+          parameters:
+            shared_buffers: 128MB
     volumes:
       - university_record_db_3_data:/home/postgres/pgdata
 
