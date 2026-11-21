@@ -567,7 +567,7 @@ services:
 
   # ==================== Applicant Service (Ciprian) ====================
   applicant-service:
-    image: ciprik13/applicant-service:4.0.0
+    image: ciprik13/applicant-service:5.0.0-rc.2
     restart: unless-stopped
     # Lab 3, grade 5: two instances, sharing applicant-db (STORE_DRIVER mongo).
     deploy:
@@ -578,8 +578,11 @@ services:
       PORT: 3003
       STORE_DRIVER: mongo
       DECEPTIVE_RATE: ${APPLICANT_DECEPTIVE_RATE:-0.35}
-      DB_HOST: applicant-db
-      DB_PORT: 27017
+      # Lab 5, grade 5: the replica set rs-applicant. DB_HOSTS replaces DB_HOST/DB_PORT; the
+      # service builds mongodb://…@<DB_HOSTS>/<DB_NAME>?replicaSet=…&authSource=admin
+      # &retryWrites=true&w=majority, so the driver follows the primary on failover.
+      DB_HOSTS: applicant-db-1:27017,applicant-db-2:27017,applicant-db-3:27017
+      DB_REPLICA_SET: rs-applicant
       DB_USER: ${APPLICANT_DB_USER}
       DB_PASSWORD: ${APPLICANT_DB_PASSWORD}
       DB_NAME: ${APPLICANT_DB_NAME}
@@ -612,30 +615,86 @@ services:
       # Lab 4, grade 8: GetRecord goes to University Record over gRPC through the Broker.
       GRPC_DEPENDENCIES: "university-record-service"
     depends_on:
-      applicant-db:
-        condition: service_healthy
+      # The init job, not a member: a healthy mongod is not yet a writable set.
+      applicant-db-rs-init:
+        condition: service_completed_successfully
       service-discovery:
         condition: service_started
 
-  applicant-db:
+  # applicant-db: three mongod members forming the replica set rs-applicant (Lab 5, grade 5), copied
+  # from Liviu's discord-dms-db template (see that cluster for why only member -1 has
+  # MONGO_INITDB_* and init.js). Member -1 also gets ETL_READER_PASSWORD, which
+  # init.js uses to create the read-only etl_reader.
+  applicant-db-1: &applicant-db
     image: mongo:7
     restart: unless-stopped
+    hostname: applicant-db-1
+    entrypoint: ["sh", "/mongod-rs.sh"]
     environment:
+      SERVICE_NAME: applicant-db-1
+      RS_NAME: rs-applicant
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?set MONGO_REPLICA_KEY in .env, see .env.example}
       MONGO_INITDB_ROOT_USERNAME: ${APPLICANT_DB_USER}
       MONGO_INITDB_ROOT_PASSWORD: ${APPLICANT_DB_PASSWORD}
       MONGO_INITDB_DATABASE: ${APPLICANT_DB_NAME}
+      ETL_READER_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
     volumes:
-      - applicant_db_data:/data/db
+      - applicant_db_1_data:/data/db
+      - ./db/mongo-rs/mongod-rs.sh:/mongod-rs.sh:ro
       - ./db/applicant-service/init.js:/docker-entrypoint-initdb.d/init.js:ro
     healthcheck:
       test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\""]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 30
+      start_period: 20s
+
+  applicant-db-2:
+    <<: *applicant-db
+    hostname: applicant-db-2
+    environment:
+      SERVICE_NAME: applicant-db-2
+      RS_NAME: rs-applicant
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?set MONGO_REPLICA_KEY in .env, see .env.example}
+    volumes:
+      - applicant_db_2_data:/data/db
+      - ./db/mongo-rs/mongod-rs.sh:/mongod-rs.sh:ro
+
+  applicant-db-3:
+    <<: *applicant-db
+    hostname: applicant-db-3
+    environment:
+      SERVICE_NAME: applicant-db-3
+      RS_NAME: rs-applicant
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?set MONGO_REPLICA_KEY in .env, see .env.example}
+    volumes:
+      - applicant_db_3_data:/data/db
+      - ./db/mongo-rs/mongod-rs.sh:/mongod-rs.sh:ro
+
+  # One-shot rs.initiate(); exits 0 on a set that is already initiated.
+  applicant-db-rs-init:
+    image: mongo:7
+    restart: "no"
+    command: ["sh", "/init-replica-set.sh"]
+    environment:
+      SERVICE_NAME: applicant-db-rs-init
+      RS_NAME: rs-applicant
+      RS_MEMBERS: applicant-db-1:27017,applicant-db-2:27017,applicant-db-3:27017
+      MONGO_ROOT_USERNAME: ${APPLICANT_DB_USER}
+      MONGO_ROOT_PASSWORD: ${APPLICANT_DB_PASSWORD}
+    volumes:
+      - ./db/mongo-rs/init-replica-set.sh:/init-replica-set.sh:ro
+    depends_on:
+      applicant-db-1:
+        condition: service_healthy
+      applicant-db-2:
+        condition: service_healthy
+      applicant-db-3:
+        condition: service_healthy
 
   # ==================== Credential Service (Ciprian) ====================
   credential-service:
-    image: ciprik13/credential-service:4.0.0
+    image: ciprik13/credential-service:5.0.0-rc.2
     restart: unless-stopped
     # Lab 3, grade 5: two instances, sharing credential-db (STORE_DRIVER mongo).
     deploy:
@@ -650,8 +709,11 @@ services:
       # Unset would mean every request that needs Applicant Service answers
       # 503 DEPENDENCY_UNAVAILABLE even though the real service is running here.
       APPLICANT_SERVICE_URL: http://message-broker:3011/applicant
-      DB_HOST: credential-db
-      DB_PORT: 27017
+      # Lab 5, grade 5: the replica set rs-credential. DB_HOSTS replaces DB_HOST/DB_PORT; the
+      # service builds mongodb://…@<DB_HOSTS>/<DB_NAME>?replicaSet=…&authSource=admin
+      # &retryWrites=true&w=majority, so the driver follows the primary on failover.
+      DB_HOSTS: credential-db-1:27017,credential-db-2:27017,credential-db-3:27017
+      DB_REPLICA_SET: rs-credential
       DB_USER: ${CREDENTIAL_DB_USER}
       DB_PASSWORD: ${CREDENTIAL_DB_PASSWORD}
       DB_NAME: ${CREDENTIAL_DB_NAME}
@@ -680,26 +742,82 @@ services:
       # Lab 4, grade 8: Applicant is called over gRPC (GetApplicant) through the Broker.
       BROKER_GRPC_URL: message-broker:50011
     depends_on:
-      credential-db:
-        condition: service_healthy
+      # The init job, not a member: a healthy mongod is not yet a writable set.
+      credential-db-rs-init:
+        condition: service_completed_successfully
       service-discovery:
         condition: service_started
 
-  credential-db:
+  # credential-db: three mongod members forming the replica set rs-credential (Lab 5, grade 5), copied
+  # from Liviu's discord-dms-db template (see that cluster for why only member -1 has
+  # MONGO_INITDB_* and init.js). Member -1 also gets ETL_READER_PASSWORD, which
+  # init.js uses to create the read-only etl_reader.
+  credential-db-1: &credential-db
     image: mongo:7
     restart: unless-stopped
+    hostname: credential-db-1
+    entrypoint: ["sh", "/mongod-rs.sh"]
     environment:
+      SERVICE_NAME: credential-db-1
+      RS_NAME: rs-credential
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?set MONGO_REPLICA_KEY in .env, see .env.example}
       MONGO_INITDB_ROOT_USERNAME: ${CREDENTIAL_DB_USER}
       MONGO_INITDB_ROOT_PASSWORD: ${CREDENTIAL_DB_PASSWORD}
       MONGO_INITDB_DATABASE: ${CREDENTIAL_DB_NAME}
+      ETL_READER_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
     volumes:
-      - credential_db_data:/data/db
+      - credential_db_1_data:/data/db
+      - ./db/mongo-rs/mongod-rs.sh:/mongod-rs.sh:ro
       - ./db/credential-service/init.js:/docker-entrypoint-initdb.d/init.js:ro
     healthcheck:
       test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\""]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 30
+      start_period: 20s
+
+  credential-db-2:
+    <<: *credential-db
+    hostname: credential-db-2
+    environment:
+      SERVICE_NAME: credential-db-2
+      RS_NAME: rs-credential
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?set MONGO_REPLICA_KEY in .env, see .env.example}
+    volumes:
+      - credential_db_2_data:/data/db
+      - ./db/mongo-rs/mongod-rs.sh:/mongod-rs.sh:ro
+
+  credential-db-3:
+    <<: *credential-db
+    hostname: credential-db-3
+    environment:
+      SERVICE_NAME: credential-db-3
+      RS_NAME: rs-credential
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?set MONGO_REPLICA_KEY in .env, see .env.example}
+    volumes:
+      - credential_db_3_data:/data/db
+      - ./db/mongo-rs/mongod-rs.sh:/mongod-rs.sh:ro
+
+  # One-shot rs.initiate(); exits 0 on a set that is already initiated.
+  credential-db-rs-init:
+    image: mongo:7
+    restart: "no"
+    command: ["sh", "/init-replica-set.sh"]
+    environment:
+      SERVICE_NAME: credential-db-rs-init
+      RS_NAME: rs-credential
+      RS_MEMBERS: credential-db-1:27017,credential-db-2:27017,credential-db-3:27017
+      MONGO_ROOT_USERNAME: ${CREDENTIAL_DB_USER}
+      MONGO_ROOT_PASSWORD: ${CREDENTIAL_DB_PASSWORD}
+    volumes:
+      - ./db/mongo-rs/init-replica-set.sh:/init-replica-set.sh:ro
+    depends_on:
+      credential-db-1:
+        condition: service_healthy
+      credential-db-2:
+        condition: service_healthy
+      credential-db-3:
+        condition: service_healthy
 
   # ==================== Server Rules Service (Ion) ====================
   server-rules-service:
@@ -1267,13 +1385,17 @@ services:
       MODERATION_DB_USER: etl_reader
       MODERATION_DB_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
       MODERATION_DB_NAME: ${MODERATION_DB_NAME}
-      APPLICANT_DB_HOSTS: applicant-db:27017
-      APPLICANT_DB_USER: ${APPLICANT_DB_USER}
-      APPLICANT_DB_PASSWORD: ${APPLICANT_DB_PASSWORD}
+      APPLICANT_DB_HOSTS: applicant-db-1:27017,applicant-db-2:27017,applicant-db-3:27017
+      APPLICANT_DB_REPLICA_SET: rs-applicant
+      # Lab 5: the read-only etl_reader (role read on this database only).
+      APPLICANT_DB_USER: etl_reader
+      APPLICANT_DB_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
       APPLICANT_DB_NAME: ${APPLICANT_DB_NAME}
-      CREDENTIAL_DB_HOSTS: credential-db:27017
-      CREDENTIAL_DB_USER: ${CREDENTIAL_DB_USER}
-      CREDENTIAL_DB_PASSWORD: ${CREDENTIAL_DB_PASSWORD}
+      CREDENTIAL_DB_HOSTS: credential-db-1:27017,credential-db-2:27017,credential-db-3:27017
+      CREDENTIAL_DB_REPLICA_SET: rs-credential
+      # Lab 5: the read-only etl_reader (role read on this database only).
+      CREDENTIAL_DB_USER: etl_reader
+      CREDENTIAL_DB_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
       CREDENTIAL_DB_NAME: ${CREDENTIAL_DB_NAME}
       RULES_DB_HOSTS: rules-db:27017
       RULES_DB_USER: ${RULES_DB_USER}
@@ -1304,8 +1426,12 @@ volumes:
   session_db_1_data:
   session_db_2_data:
   session_db_3_data:
-  applicant_db_data:
-  credential_db_data:
+  applicant_db_1_data:
+  applicant_db_2_data:
+  applicant_db_3_data:
+  credential_db_1_data:
+  credential_db_2_data:
+  credential_db_3_data:
   rules_db_data:
   university_record_db_1_data:
   university_record_db_2_data:
