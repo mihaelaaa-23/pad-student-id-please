@@ -839,7 +839,10 @@ services:
     environment:
       WS_PORT: 3008
       HTTP_PORT: 3009
-      MONGODB_URI: mongodb://${DISCORD_DMS_DB_USER}:${DISCORD_DMS_DB_PASSWORD}@discord-dms-db:27017/?authSource=admin
+      # Lab 5, grade 5: every member of the set, so the driver keeps writing after a
+      # failover. w=majority is what makes an acknowledged write survive losing the
+      # primary, which is the point of replicating at all.
+      MONGODB_URI: mongodb://${DISCORD_DMS_DB_USER}:${DISCORD_DMS_DB_PASSWORD}@discord-dms-db-1:27017,discord-dms-db-2:27017,discord-dms-db-3:27017/?replicaSet=rs-discord-dms&authSource=admin&retryWrites=true&w=majority
       MONGODB_DATABASE: ${DISCORD_DMS_DB_NAME}
       SESSION_SERVICE_URL: http://message-broker:3011/session
       WS_TICKET_SECRET: ${WS_TICKET_SECRET:-}
@@ -872,28 +875,97 @@ services:
       # Lab 3, grade 3: DEBUG, INFO, WARN or ERROR.
       LOG_LEVEL: ${DISCORD_DMS_LOG_LEVEL:-INFO}
     depends_on:
-      discord-dms-db:
-        condition: service_healthy
+      # Not the members but the init job: a healthy mongod is not yet a replica set,
+      # and the service's first write needs a primary.
+      discord-dms-db-rs-init:
+        condition: service_completed_successfully
       service-discovery:
         condition: service_started
       message-broker:
         condition: service_started
 
-  discord-dms-db:
+  # discord-dms-db: three mongod members forming the replica set rs-discord-dms, one
+  # primary and two secondaries. The template for the other Mongo clusters: copy the
+  # three members and the -rs-init job, then change RS_NAME, the hostnames, the
+  # volumes, the init.js mount and the DISCORD_DMS_DB_* values.
+  #
+  # Only member -1 carries MONGO_INITDB_ROOT_* and the init.js mount, because the
+  # image runs them against an empty data directory and the set then replicates the
+  # users, the database and its indexes to the others. Giving the same variables to
+  # -2 and -3 would have them bootstrap their own standalone users, which is what
+  # makes rs.initiate() fail. That is also why -2 and -3 repeat only the two
+  # variables every member needs rather than inheriting the whole block.
+  discord-dms-db-1: &discord-dms-db
     image: mongo:7
     restart: unless-stopped
+    hostname: discord-dms-db-1
+    # The keyfile for internal authentication is written inside the container,
+    # because mongod refuses a keyfile that is group- or world-readable.
+    entrypoint: ["sh", "/mongod-rs.sh"]
     environment:
+      SERVICE_NAME: discord-dms-db-1
+      RS_NAME: rs-discord-dms
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?set MONGO_REPLICA_KEY in .env, see .env.example}
       MONGO_INITDB_ROOT_USERNAME: ${DISCORD_DMS_DB_USER}
       MONGO_INITDB_ROOT_PASSWORD: ${DISCORD_DMS_DB_PASSWORD}
       MONGO_INITDB_DATABASE: ${DISCORD_DMS_DB_NAME}
     volumes:
-      - discord_dms_db_data:/data/db
+      - discord_dms_db_1_data:/data/db
+      - ./db/mongo-rs/mongod-rs.sh:/mongod-rs.sh:ro
       - ./db/discord-dms-service/init.js:/docker-entrypoint-initdb.d/init.js:ro
     healthcheck:
       test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\""]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 30
+      start_period: 20s
+
+  discord-dms-db-2:
+    <<: *discord-dms-db
+    hostname: discord-dms-db-2
+    environment:
+      SERVICE_NAME: discord-dms-db-2
+      RS_NAME: rs-discord-dms
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?set MONGO_REPLICA_KEY in .env, see .env.example}
+    volumes:
+      - discord_dms_db_2_data:/data/db
+      - ./db/mongo-rs/mongod-rs.sh:/mongod-rs.sh:ro
+
+  discord-dms-db-3:
+    <<: *discord-dms-db
+    hostname: discord-dms-db-3
+    environment:
+      SERVICE_NAME: discord-dms-db-3
+      RS_NAME: rs-discord-dms
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?set MONGO_REPLICA_KEY in .env, see .env.example}
+    volumes:
+      - discord_dms_db_3_data:/data/db
+      - ./db/mongo-rs/mongod-rs.sh:/mongod-rs.sh:ro
+
+  # mongod --replSet does not form a set by itself: exactly one rs.initiate() names
+  # the members. This one-shot job does it, waits for a primary, and exits 0 on a
+  # set that is already initiated, so it runs on every `up`. The service waits for
+  # it with service_completed_successfully, so it never starts against a set that
+  # cannot accept writes.
+  discord-dms-db-rs-init:
+    image: mongo:7
+    restart: "no"
+    command: ["sh", "/init-replica-set.sh"]
+    environment:
+      SERVICE_NAME: discord-dms-db-rs-init
+      RS_NAME: rs-discord-dms
+      RS_MEMBERS: discord-dms-db-1:27017,discord-dms-db-2:27017,discord-dms-db-3:27017
+      MONGO_ROOT_USERNAME: ${DISCORD_DMS_DB_USER}
+      MONGO_ROOT_PASSWORD: ${DISCORD_DMS_DB_PASSWORD}
+    volumes:
+      - ./db/mongo-rs/init-replica-set.sh:/init-replica-set.sh:ro
+    depends_on:
+      discord-dms-db-1:
+        condition: service_healthy
+      discord-dms-db-2:
+        condition: service_healthy
+      discord-dms-db-3:
+        condition: service_healthy
 
   # ==================== Data Warehouse (Mihaela, Lab 5) ====================
   # Lab 5, grade 4: the analytics database, filled by the etl job from every service's
@@ -971,7 +1043,8 @@ services:
       RULES_DB_USER: ${RULES_DB_USER}
       RULES_DB_PASSWORD: ${RULES_DB_PASSWORD}
       RULES_DB_NAME: ${RULES_DB_NAME}
-      DISCORD_DMS_DB_HOSTS: discord-dms-db:27017
+      DISCORD_DMS_DB_HOSTS: discord-dms-db-1:27017,discord-dms-db-2:27017,discord-dms-db-3:27017
+      DISCORD_DMS_DB_REPLICA_SET: rs-discord-dms
       DISCORD_DMS_DB_USER: ${DISCORD_DMS_DB_USER}
       DISCORD_DMS_DB_PASSWORD: ${DISCORD_DMS_DB_PASSWORD}
       DISCORD_DMS_DB_NAME: ${DISCORD_DMS_DB_NAME}
@@ -1002,6 +1075,8 @@ volumes:
   # Legacy standalone database volume; retained for backup and migration recovery.
   university_record_db_data:
   moderation_db_data:
-  discord_dms_db_data:
+  discord_dms_db_1_data:
+  discord_dms_db_2_data:
+  discord_dms_db_3_data:
   warehouse_db_data:
   etl_deps:

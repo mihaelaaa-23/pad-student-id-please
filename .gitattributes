@@ -1,0 +1,9 @@
+# Shell scripts are bind-mounted into Linux containers and run with sh, so they
+# must keep LF endings whatever core.autocrlf is set to on the machine that cloned
+# the repository. With CRLF the first line already fails:
+#
+#   /init-app-db.sh: set: line 1: illegal option -
+#
+# which is how db/postgres-ha/init-app-db.sh and db/mongo-rs/*.sh break on a
+# Windows checkout, although they are stored here with LF.
+*.sh text eol=lf
