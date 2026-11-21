@@ -540,7 +540,7 @@ services:
 
   # ==================== Moderation Service (Liviu) ====================
   moderation-service:
-    image: d3adeye/moderation-service:4.0.0-rc.3
+    image: d3adeye/moderation-service:4.0.0
     restart: unless-stopped
     # Lab 3, grade 5: two instances. Each registers its own container hostname with
     # Service Discovery, so there is no fixed host port and no container_name. The
@@ -611,7 +611,7 @@ services:
 
   # ==================== Discord DMs Service (Liviu) ====================
   discord-dms-service:
-    image: d3adeye/discord-dms-service:4.0.0-rc.2
+    image: d3adeye/discord-dms-service:4.0.0
     restart: unless-stopped
     # One instance on purpose (Lab 3, grade 5): 3008 is published to the host, and a
     # message sent to one replica would not reach sockets connected to another.
