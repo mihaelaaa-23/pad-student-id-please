@@ -403,8 +403,10 @@ services:
     # at http://localhost:3000/session.
     environment:
       PORT: 3002
-      DB_HOST: session-db
-      DB_PORT: 5432
+      # Lab 5, grade 5: session-db is a 3-node Spilo cluster; pg-router:5402 always
+      # forwards to its current leader, so the service code is unchanged.
+      DB_HOST: pg-router
+      DB_PORT: 5402
       DB_USER: ${SESSION_DB_USER}
       DB_PASSWORD: ${SESSION_DB_PASSWORD}
       DB_NAME: ${SESSION_DB_NAME}
@@ -442,31 +444,95 @@ services:
       # (EvaluateRules) and University Record (GetRecord).
       GRPC_DEPENDENCIES: applicant-service,credential-service,server-rules-service,university-record-service
     depends_on:
-      session-db:
+      session-db-init:
+        condition: service_completed_successfully
+      pg-router:
         condition: service_healthy
       service-discovery:
         condition: service_started
       message-broker:
         condition: service_started
 
-  session-db:
-    image: postgres:16-alpine
-    # Lab 5, grade 8: these databases take part in the two-phase commit, which
-    # needs prepared transactions (PostgreSQL's default is 0, i.e. disabled).
-    command: ["postgres", "-c", "max_prepared_transactions=64"]
+  # session-db: three Spilo nodes on Ciprian's player-db template (one leader, two
+  # streaming replicas). It takes part in the two-phase commit (Lab 5, grade 8), so
+  # max_prepared_transactions is set in the DCS, the cluster-wide config every node and
+  # every future leader reads, and locally for the first bootstrap. Prepared
+  # transactions are WAL-logged and replicated, so a failover keeps them.
+  session-db-1: &session-db
+    image: ghcr.io/zalando/spilo-16:3.3-p1
     restart: unless-stopped
+    hostname: session-db-1
     environment:
-      POSTGRES_USER: ${SESSION_DB_USER}
-      POSTGRES_PASSWORD: ${SESSION_DB_PASSWORD}
-      POSTGRES_DB: ${SESSION_DB_NAME}
+      SCOPE: session-db
+      PGVERSION: "16"
+      ETCD3_HOST: etcd:2379
+      SPILO_PROVIDER: local
+      PGPASSWORD_SUPERUSER: ${PG_SUPERUSER_PASSWORD:?set PG_SUPERUSER_PASSWORD in .env, see .env.example}
+      PGPASSWORD_ADMIN: ${PG_ADMIN_PASSWORD:?set PG_ADMIN_PASSWORD in .env, see .env.example}
+      PGPASSWORD_STANDBY: ${PG_REPLICATION_PASSWORD:?set PG_REPLICATION_PASSWORD in .env, see .env.example}
+      ALLOW_NOSSL: "true"
+      SPILO_CONFIGURATION: |
+        bootstrap:
+          dcs:
+            postgresql:
+              parameters:
+                max_prepared_transactions: 64
+        postgresql:
+          parameters:
+            shared_buffers: 128MB
+            max_prepared_transactions: 64
     volumes:
-      - session_db_data:/var/lib/postgresql/data
-      - ./db/session-service/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - session_db_1_data:/home/postgres/pgdata
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${SESSION_DB_USER} -d ${SESSION_DB_NAME}"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8008/health', timeout=2)"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 30
+      start_period: 30s
+    depends_on:
+      etcd:
+        condition: service_healthy
+
+  session-db-2:
+    <<: *session-db
+    hostname: session-db-2
+    volumes:
+      - session_db_2_data:/home/postgres/pgdata
+
+  session-db-3:
+    <<: *session-db
+    hostname: session-db-3
+    volumes:
+      - session_db_3_data:/home/postgres/pgdata
+
+  # Creates the app role and database and runs init.sql once, through the leader port
+  # (db/postgres-ha/init-app-db.sh, same job as player-db-init).
+  session-db-init:
+    image: postgres:16-alpine
+    restart: "no"
+    command: ["sh", "/init-app-db.sh"]
+    environment:
+      SERVICE_NAME: session-db-init
+      PGHOST: pg-router
+      PGPORT: 5402
+      PGUSER: postgres
+      PGPASSWORD: ${PG_SUPERUSER_PASSWORD:?set PG_SUPERUSER_PASSWORD in .env, see .env.example}
+      APP_DB_USER: ${SESSION_DB_USER}
+      APP_DB_PASSWORD: ${SESSION_DB_PASSWORD}
+      APP_DB_NAME: ${SESSION_DB_NAME}
+      ETL_READER_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
+    volumes:
+      - ./db/postgres-ha/init-app-db.sh:/init-app-db.sh:ro
+      - ./db/session-service/init.sql:/init-sql/init.sql:ro
+    depends_on:
+      pg-router:
+        condition: service_healthy
+      session-db-1:
+        condition: service_healthy
+      session-db-2:
+        condition: service_healthy
+      session-db-3:
+        condition: service_healthy
 
   # ==================== Applicant Service (Ciprian) ====================
   applicant-service:
@@ -1129,9 +1195,10 @@ services:
       PLAYER_DB_USER: etl_reader
       PLAYER_DB_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
       PLAYER_DB_NAME: ${PLAYER_DB_NAME}
-      SESSION_DB_HOST: session-db
-      SESSION_DB_USER: ${SESSION_DB_USER}
-      SESSION_DB_PASSWORD: ${SESSION_DB_PASSWORD}
+      SESSION_DB_HOST: pg-router
+      SESSION_DB_PORT: "5502"
+      SESSION_DB_USER: etl_reader
+      SESSION_DB_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
       SESSION_DB_NAME: ${SESSION_DB_NAME}
       # University Record Spilo replicas: ETL uses the read-only replica endpoint.
       UNIVERSITY_RECORD_DB_HOST: pg-router
@@ -1181,7 +1248,9 @@ volumes:
   player_db_1_data:
   player_db_2_data:
   player_db_3_data:
-  session_db_data:
+  session_db_1_data:
+  session_db_2_data:
+  session_db_3_data:
   applicant_db_data:
   credential_db_data:
   rules_db_data:
