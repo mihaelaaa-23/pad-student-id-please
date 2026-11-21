@@ -3,7 +3,7 @@ services:
   # The single entry point. It waits only for Service Discovery: it reads the instance
   # list from it at startup and answers 502 BAD_GATEWAY for a service until it is up.
   gateway:
-    image: mihaela5/gateway:4.0.0
+    image: mihaela5/gateway:5.0.0-rc.1
     restart: unless-stopped
     ports:
       - "3000:3000"
@@ -46,6 +46,8 @@ services:
       CACHE_NODE_FAILURES_TO_EJECT: ${CACHE_NODE_FAILURES_TO_EJECT:-3}
       CACHE_NODE_RETRY_S: ${CACHE_NODE_RETRY_S:-10}
       AUTH_CACHE_TTL_S: ${AUTH_CACHE_TTL_S:-60}
+      CACHE_MAX_CONNECTIONS: ${CACHE_MAX_CONNECTIONS:-64}
+      AUTH_LOOKUP_TIMEOUT_MS: ${AUTH_LOOKUP_TIMEOUT_MS:-2000}
     # service_started, not service_healthy: with no list from Service Discovery the Gateway
     # routes to the fixed upstreams above, so Service Discovery failing to start does not
     # take down the only entry point.
