@@ -46,3 +46,21 @@ targetDb.applicants.createIndex({ studentId: 1 });
 targetDb.applicants.createIndex({ role: 1 });
 
 print('applicant_service_db initialised: validator and indexes created');
+
+// Lab 5, grade 4: the read-only user the ETL job reads this database with, through
+// the replica set's secondaries. Created in admin (the ETL authenticates with
+// authSource=admin) with role read on this database only, so the warehouse load
+// can never write here. Skipped when ETL_READER_PASSWORD is unset (a standalone run
+// of this script); the password is never printed.
+const etlReaderPassword = process.env.ETL_READER_PASSWORD;
+if (etlReaderPassword) {
+  const adminDb = db.getSiblingDB('admin');
+  if (!adminDb.getUser('etl_reader')) {
+    adminDb.createUser({
+      user: 'etl_reader',
+      pwd: etlReaderPassword,
+      roles: [{ role: 'read', db: targetDb.getName() }],
+    });
+  }
+  print('etl_reader ready (read on ' + targetDb.getName() + ')');
+}
