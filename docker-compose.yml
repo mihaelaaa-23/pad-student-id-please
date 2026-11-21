@@ -660,8 +660,8 @@ services:
       PORT: 3006
       GRPC_PORT: 50006
       GRPC_HOST: 0.0.0.0
-      DB_HOST: university-record-db
-      DB_PORT: 5432
+      DB_HOST: pg-router
+      DB_PORT: 5406
       DB_USER: ${UNIVERSITY_RECORD_DB_USER}
       DB_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
       DB_NAME: ${UNIVERSITY_RECORD_DB_NAME}
@@ -673,26 +673,82 @@ services:
       SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
       SD_TOPICS: applicant.created
     depends_on:
-      university-record-db:
-        condition: service_healthy
+      university-record-db-init:
+        condition: service_completed_successfully
       service-discovery:
         condition: service_started
 
-  university-record-db:
-    image: postgres:16-alpine
+  # ==================== University Record PostgreSQL HA (Ion) ====================
+  # Three Spilo nodes share one Patroni scope and elect a leader through etcd.
+  # The application connects through pg-router:5406; replicas are available at 5506.
+  university-record-db-1: &university-record-db
+    image: ghcr.io/zalando/spilo-16:3.3-p1
     restart: unless-stopped
+    hostname: university-record-db-1
     environment:
-      POSTGRES_USER: ${UNIVERSITY_RECORD_DB_USER}
-      POSTGRES_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
-      POSTGRES_DB: ${UNIVERSITY_RECORD_DB_NAME}
+      SCOPE: university-record-db
+      PGVERSION: "16"
+      ETCD3_HOST: etcd:2379
+      SPILO_PROVIDER: local
+      PGPASSWORD_SUPERUSER: ${PG_SUPERUSER_PASSWORD:?set PG_SUPERUSER_PASSWORD in .env, see .env.example}
+      PGPASSWORD_ADMIN: ${PG_ADMIN_PASSWORD:?set PG_ADMIN_PASSWORD in .env, see .env.example}
+      PGPASSWORD_STANDBY: ${PG_REPLICATION_PASSWORD:?set PG_REPLICATION_PASSWORD in .env, see .env.example}
+      ALLOW_NOSSL: "true"
+      SPILO_CONFIGURATION: |
+        postgresql:
+          parameters:
+            shared_buffers: 128MB
     volumes:
-      - university_record_db_data:/var/lib/postgresql/data
-      - ./db/university-record-service/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - university_record_db_1_data:/home/postgres/pgdata
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${UNIVERSITY_RECORD_DB_USER} -d ${UNIVERSITY_RECORD_DB_NAME}"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8008/health', timeout=2)"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 30
+      start_period: 30s
+    depends_on:
+      etcd:
+        condition: service_healthy
+
+  university-record-db-2:
+    <<: *university-record-db
+    hostname: university-record-db-2
+    volumes:
+      - university_record_db_2_data:/home/postgres/pgdata
+
+  university-record-db-3:
+    <<: *university-record-db
+    hostname: university-record-db-3
+    volumes:
+      - university_record_db_3_data:/home/postgres/pgdata
+
+  # Idempotent application-role, database, init-SQL and ETL-reader setup.
+  university-record-db-init:
+    image: postgres:16-alpine
+    restart: "no"
+    command: ["sh", "/init-app-db.sh"]
+    environment:
+      SERVICE_NAME: university-record-db-init
+      PGHOST: pg-router
+      PGPORT: 5406
+      PGUSER: postgres
+      PGPASSWORD: ${PG_SUPERUSER_PASSWORD:?set PG_SUPERUSER_PASSWORD in .env, see .env.example}
+      APP_DB_USER: ${UNIVERSITY_RECORD_DB_USER}
+      APP_DB_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
+      APP_DB_NAME: ${UNIVERSITY_RECORD_DB_NAME}
+      ETL_READER_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
+    volumes:
+      - ./db/postgres-ha/init-app-db.sh:/init-app-db.sh:ro
+      - ./db/university-record-service/init.sql:/init-sql/init.sql:ro
+    depends_on:
+      pg-router:
+        condition: service_healthy
+      university-record-db-1:
+        condition: service_healthy
+      university-record-db-2:
+        condition: service_healthy
+      university-record-db-3:
+        condition: service_healthy
 
   # ==================== Moderation Service (Liviu) ====================
   moderation-service:
@@ -893,9 +949,11 @@ services:
       SESSION_DB_USER: ${SESSION_DB_USER}
       SESSION_DB_PASSWORD: ${SESSION_DB_PASSWORD}
       SESSION_DB_NAME: ${SESSION_DB_NAME}
-      UNIVERSITY_RECORD_DB_HOST: university-record-db
-      UNIVERSITY_RECORD_DB_USER: ${UNIVERSITY_RECORD_DB_USER}
-      UNIVERSITY_RECORD_DB_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
+      # University Record Spilo replicas: ETL uses the read-only replica endpoint.
+      UNIVERSITY_RECORD_DB_HOST: pg-router
+      UNIVERSITY_RECORD_DB_PORT: "5506"
+      UNIVERSITY_RECORD_DB_USER: etl_reader
+      UNIVERSITY_RECORD_DB_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
       UNIVERSITY_RECORD_DB_NAME: ${UNIVERSITY_RECORD_DB_NAME}
       MODERATION_DB_HOST: moderation-db
       MODERATION_DB_USER: ${MODERATION_DB_USER}
@@ -938,6 +996,10 @@ volumes:
   applicant_db_data:
   credential_db_data:
   rules_db_data:
+  university_record_db_1_data:
+  university_record_db_2_data:
+  university_record_db_3_data:
+  # Legacy standalone database volume; retained for backup and migration recovery.
   university_record_db_data:
   moderation_db_data:
   discord_dms_db_data:
