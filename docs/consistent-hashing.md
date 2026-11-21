@@ -258,6 +258,18 @@ Redis Cluster uses a different sharding model from our Gateway ring.
 It does not use consistent hashing. Instead, it divides the keyspace
 into a fixed number of 16,384 hash slots.
 
+This model is closely related to the fixed-number-of-partitions
+approach described by Martin Kleppmann in Chapter 6 of Designing
+Data-Intensive Applications (DDIA). The key-to-slot mapping remains
+stable, while the assignment of slots to primary nodes changes
+during rebalancing.
+
+Kleppmann distinguishes the original ring-based consistent hashing
+described by Karger et al. from ordinary hash partitioning. He also
+warns that database documentation sometimes uses the term
+"consistent hashing" inaccurately. In this document, the term
+specifically refers to our Gateway's ring-based algorithm.
+
 ### 7.1 Hash slots and CRC16
 
 Redis calculates a key's slot using:
@@ -464,10 +476,18 @@ availability and the underlying data can repopulate the cache.
    failure-state information:
    https://redis.io/docs/latest/commands/cluster-info/
 
-5. Project Gateway, **consistent-hash ring implementation**
-   (commit 334239e):
-   https://github.com/mihaelaaa-23/gateway/blob/334239e/app/cache/ring.py
+5. Karger, David; Lehman, Eric; Leighton, Tom; Panigrahy, Rina;
+   Levine, Matthew; and Lewin, Daniel. "Consistent Hashing and Random
+   Trees: Distributed Caching Protocols for Relieving Hot Spots on
+   the World Wide Web." Proceedings of STOC '97, pages 654–663,
+   1997. DOI: https://doi.org/10.1145/258533.258660
+   Public paper: https://people.csail.mit.edu/karger/Papers/web.pdf
 
-6. Project Gateway, **cache client and node health handling**
-   (commit 70c600f):
-   https://github.com/mihaelaaa-23/gateway/blob/70c600f/app/cache/client.py
+6. Kleppmann, Martin. Designing Data-Intensive Applications.
+   1st edition, O'Reilly Media, 2017. Chapter 6: "Partitioning",
+   especially "Consistent Hashing" and "Fixed number of partitions":
+   https://www.oreilly.com/library/view/designing-data-intensive-applications/9781491903063/ch06.html
+
+7. Project implementation files (repository-local paths; not
+   public links): services/gateway/app/cache/ring.py and
+   services/gateway/app/cache/client.py.
