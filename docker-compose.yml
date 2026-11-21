@@ -792,37 +792,149 @@ services:
       GRPC_DEPENDENCIES: "applicant-service,credential-service,server-rules-service,university-record-service"
       # Lab 3, grade 3: DEBUG, INFO, WARN or ERROR.
       LOG_LEVEL: ${MODERATION_LOG_LEVEL:-INFO}
-      DB_HOST: moderation-db
-      DB_PORT: 5432
+      # Lab 5, grade 5: pg-router's leader port, so a failover moves the writes to the
+      # new leader without the service knowing. Host and port only: no code change.
+      DB_HOST: pg-router
+      DB_PORT: 5407
       DB_USER: ${MODERATION_DB_USER}
       DB_PASSWORD: ${MODERATION_DB_PASSWORD}
       DB_NAME: ${MODERATION_DB_NAME}
     depends_on:
-      moderation-db:
-        condition: service_healthy
+      # Not the nodes but the init job: a healthy Patroni node is not yet a database
+      # with the application role, the schema and etl_reader in it.
+      moderation-db-init:
+        condition: service_completed_successfully
       service-discovery:
         condition: service_started
       message-broker:
         condition: service_started
 
-  moderation-db:
-    image: postgres:16-alpine
-    # Lab 5, grade 8: these databases take part in the two-phase commit, which
-    # needs prepared transactions (PostgreSQL's default is 0, i.e. disabled).
-    command: ["postgres", "-c", "max_prepared_transactions=64"]
+  # moderation-db: three Spilo nodes (Patroni + PostgreSQL 16), one leader and two
+  # streaming replicas, reached through pg-router on 5407 (leader) and 5507 (replicas).
+  # Copied from player-db, so see that cluster for what each variable does.
+  moderation-db-1: &moderation-db
+    image: ghcr.io/zalando/spilo-16:3.3-p1
     restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${MODERATION_DB_USER}
-      POSTGRES_PASSWORD: ${MODERATION_DB_PASSWORD}
-      POSTGRES_DB: ${MODERATION_DB_NAME}
+    hostname: moderation-db-1
+    environment: &moderation-db-env
+      SCOPE: moderation-db
+      PGVERSION: "16"
+      ETCD3_HOST: etcd:2379
+      SPILO_PROVIDER: local
+      PGPASSWORD_SUPERUSER: ${PG_SUPERUSER_PASSWORD:?set PG_SUPERUSER_PASSWORD in .env, see .env.example}
+      PGPASSWORD_ADMIN: ${PG_ADMIN_PASSWORD:?set PG_ADMIN_PASSWORD in .env, see .env.example}
+      PGPASSWORD_STANDBY: ${PG_REPLICATION_PASSWORD:?set PG_REPLICATION_PASSWORD in .env, see .env.example}
+      ALLOW_NOSSL: "true"
+      # Per node, so SPILO_CONFIGURATION is overridden on -2 and -3 rather than shared.
+      #
+      # connect_address: every node is advertised by its compose hostname, not its IP,
+      # as in the player-db and university-record-db clusters. A container can come
+      # back on a different IP after `docker compose stop` + `up`, and the stale IP in
+      # etcd then points the members at the wrong container, so replicas stop streaming
+      # and nothing is promoted.
+      #
+      # Lab 5, grade 8: this cluster takes part in the two-phase commit, so it needs
+      # prepared transactions, which PostgreSQL disables by default. Set twice on
+      # purpose: under bootstrap.dcs for a cluster initialised from scratch, and under
+      # postgresql for a node joining an already bootstrapped one. A node without it
+      # refuses PREPARE TRANSACTION, so a decision would abort whenever that node
+      # happened to be the leader.
+      SPILO_CONFIGURATION: |
+        bootstrap:
+          dcs:
+            postgresql:
+              parameters:
+                max_prepared_transactions: 64
+        restapi:
+          connect_address: moderation-db-1:8008
+        postgresql:
+          connect_address: moderation-db-1:5432
+          parameters:
+            shared_buffers: 128MB
+            max_prepared_transactions: 64
     volumes:
-      - moderation_db_data:/var/lib/postgresql/data
-      - ./db/moderation-service/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - moderation_db_1_data:/home/postgres/pgdata
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${MODERATION_DB_USER} -d ${MODERATION_DB_NAME}"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8008/health', timeout=2)"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 30
+      start_period: 30s
+    depends_on:
+      etcd:
+        condition: service_healthy
+
+  moderation-db-2:
+    <<: *moderation-db
+    hostname: moderation-db-2
+    environment:
+      <<: *moderation-db-env
+      SPILO_CONFIGURATION: |
+        bootstrap:
+          dcs:
+            postgresql:
+              parameters:
+                max_prepared_transactions: 64
+        restapi:
+          connect_address: moderation-db-2:8008
+        postgresql:
+          connect_address: moderation-db-2:5432
+          parameters:
+            shared_buffers: 128MB
+            max_prepared_transactions: 64
+    volumes:
+      - moderation_db_2_data:/home/postgres/pgdata
+
+  moderation-db-3:
+    <<: *moderation-db
+    hostname: moderation-db-3
+    environment:
+      <<: *moderation-db-env
+      SPILO_CONFIGURATION: |
+        bootstrap:
+          dcs:
+            postgresql:
+              parameters:
+                max_prepared_transactions: 64
+        restapi:
+          connect_address: moderation-db-3:8008
+        postgresql:
+          connect_address: moderation-db-3:5432
+          parameters:
+            shared_buffers: 128MB
+            max_prepared_transactions: 64
+    volumes:
+      - moderation_db_3_data:/home/postgres/pgdata
+
+  # Idempotent application-role, database, init-SQL and ETL-reader setup, through the
+  # leader port. Spilo bootstraps PostgreSQL itself, so the image never runs
+  # /docker-entrypoint-initdb.d and init.sql has to be applied from outside.
+  moderation-db-init:
+    image: postgres:16-alpine
+    restart: "no"
+    command: ["sh", "/init-app-db.sh"]
+    environment:
+      SERVICE_NAME: moderation-db-init
+      PGHOST: pg-router
+      PGPORT: 5407
+      PGUSER: postgres
+      PGPASSWORD: ${PG_SUPERUSER_PASSWORD:?set PG_SUPERUSER_PASSWORD in .env, see .env.example}
+      APP_DB_USER: ${MODERATION_DB_USER}
+      APP_DB_PASSWORD: ${MODERATION_DB_PASSWORD}
+      APP_DB_NAME: ${MODERATION_DB_NAME}
+      ETL_READER_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
+    volumes:
+      - ./db/postgres-ha/init-app-db.sh:/init-app-db.sh:ro
+      - ./db/moderation-service/init.sql:/init-sql/init.sql:ro
+    depends_on:
+      pg-router:
+        condition: service_healthy
+      moderation-db-1:
+        condition: service_healthy
+      moderation-db-2:
+        condition: service_healthy
+      moderation-db-3:
+        condition: service_healthy
 
   # ==================== Discord DMs Service (Liviu) ====================
   discord-dms-service:
@@ -1027,9 +1139,13 @@ services:
       UNIVERSITY_RECORD_DB_USER: etl_reader
       UNIVERSITY_RECORD_DB_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
       UNIVERSITY_RECORD_DB_NAME: ${UNIVERSITY_RECORD_DB_NAME}
-      MODERATION_DB_HOST: moderation-db
-      MODERATION_DB_USER: ${MODERATION_DB_USER}
-      MODERATION_DB_PASSWORD: ${MODERATION_DB_PASSWORD}
+      MODERATION_DB_HOST: pg-router
+      MODERATION_DB_PORT: "5507"
+      # Lab 5: the read-only role moderation-db-init creates (SELECT only), not
+      # Moderation's own user, and a replica port so the analytics reads never
+      # compete with the decisions being written on the leader.
+      MODERATION_DB_USER: etl_reader
+      MODERATION_DB_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
       MODERATION_DB_NAME: ${MODERATION_DB_NAME}
       APPLICANT_DB_HOSTS: applicant-db:27017
       APPLICANT_DB_USER: ${APPLICANT_DB_USER}
@@ -1074,7 +1190,9 @@ volumes:
   university_record_db_3_data:
   # Legacy standalone database volume; retained for backup and migration recovery.
   university_record_db_data:
-  moderation_db_data:
+  moderation_db_1_data:
+  moderation_db_2_data:
+  moderation_db_3_data:
   discord_dms_db_1_data:
   discord_dms_db_2_data:
   discord_dms_db_3_data:
