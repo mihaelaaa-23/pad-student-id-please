@@ -291,7 +291,7 @@ STATUS_URL="$BASE_URL/university-record/status"
 # A valid, read-only evaluation request; it does not create an applicant.
 PAYLOAD="$TMP_DIR/evaluate.json"
 printf '%s\n' \
-  '{"applicantId":"00000000-0000-4000-8000-000000000001","applicant":{"previousBan":false}}' \
+  '{"applicantId":"00000000-0000-4000-8000-000000000001","applicant":{"previouslyBanned":false}}' \
   > "$PAYLOAD"
 
 echo

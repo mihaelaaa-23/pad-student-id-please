@@ -43,7 +43,12 @@ log INFO "keyfile written, starting mongod as a member of ${RS_NAME}"
 
 # Hand over to the image's entrypoint so that MONGO_INITDB_* and
 # /docker-entrypoint-initdb.d keep working exactly as they do without a replica set.
-exec docker-entrypoint.sh mongod \
-  --replSet "$RS_NAME" \
-  --keyFile "$KEYFILE" \
-  --bind_ip_all
+# Optional per-instance WiredTiger cache limit for hosts running
+# multiple MongoDB members within a constrained memory allocation.
+set -- --replSet "$RS_NAME" --keyFile "$KEYFILE" --bind_ip_all
+
+if [ -n "${MONGO_WT_CACHE_GB:-}" ]; then
+  set -- "$@" --wiredTigerCacheSizeGB "$MONGO_WT_CACHE_GB"
+fi
+
+exec docker-entrypoint.sh mongod "$@"
