@@ -1258,6 +1258,7 @@ services:
       MONGO_INITDB_ROOT_USERNAME: ${DISCORD_DMS_DB_USER}
       MONGO_INITDB_ROOT_PASSWORD: ${DISCORD_DMS_DB_PASSWORD}
       MONGO_INITDB_DATABASE: ${DISCORD_DMS_DB_NAME}
+      ETL_READER_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
     volumes:
       - discord_dms_db_1_data:/data/db
       - ./db/mongo-rs/mongod-rs.sh:/mongod-rs.sh:ro
@@ -1403,8 +1404,9 @@ services:
       RULES_DB_NAME: ${RULES_DB_NAME}
       DISCORD_DMS_DB_HOSTS: discord-dms-db-1:27017,discord-dms-db-2:27017,discord-dms-db-3:27017
       DISCORD_DMS_DB_REPLICA_SET: rs-discord-dms
-      DISCORD_DMS_DB_USER: ${DISCORD_DMS_DB_USER}
-      DISCORD_DMS_DB_PASSWORD: ${DISCORD_DMS_DB_PASSWORD}
+      # Lab 5: the read-only etl_reader (role read on this database only).
+      DISCORD_DMS_DB_USER: etl_reader
+      DISCORD_DMS_DB_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
       DISCORD_DMS_DB_NAME: ${DISCORD_DMS_DB_NAME}
     volumes:
       - ./etl:/etl:ro
