@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # Lab 5, grade 10: the whole stack end to end. Exits non-zero on the first failure.
 #   1. docker compose pull && docker compose up -d (skip with E2E_SKIP_UP=1)
-#   2. wait for the Gateway's and every service's /status through the Gateway
+#   2. wait for the Gateway's and every service's /status through the Gateway, then for the
+#      first logs in Loki (the gateway collection downloads them)
 #   3. every Postman collection with newman
 #   4. the five demo scripts, with NONINTERACTIVE=1
 #   5. every Prometheus target is up
 #
 #   bash scripts/lab5-e2e.sh
 #
-# Settings: E2E_SKIP_UP=1 (use the stack as it is), E2E_SKIP_DEMOS=1, STATUS_TIMEOUT_S (300).
+# Settings: E2E_SKIP_UP=1 (use the stack as it is), E2E_SKIP_DEMOS=1, STATUS_TIMEOUT_S (300),
+# LOGS_TIMEOUT_S (120: how long to wait for the first logs in Loki).
 # Needs Node.js for newman (npx downloads it on the first run).
 NONINTERACTIVE=1
 source "$(dirname "$0")/lab5-lib.sh"
@@ -65,6 +67,31 @@ for service in $SERVICES; do
   wait_until "$STATUS_TIMEOUT_S" "/$service/status" service_up
 done
 passed "every /status answers 200"
+
+# ---------------------------------------------------------------- 2b. logs in Loki
+
+# On fresh volumes Alloy and Loki need a little while before /logs/download has anything,
+# and the gateway collection's "Download Logs" requests read lines from several services.
+step "Wait until the Gateway's /logs/download returns lines from several services (Alloy -> Loki)"
+LOGS_TIMEOUT_S="${LOGS_TIMEOUT_S:-120}"
+logs_ready() {
+  curl -s --max-time 10 -H "Authorization: Bearer $SERVICE_TOKEN" -o "$TMP_DIR/logs.ndjson" \
+    "$BASE_URL/logs/download?limit=500" &&
+    python3 - "$TMP_DIR/logs.ndjson" <<'PY'
+import json, sys
+services = set()
+for line in open(sys.argv[1], errors="replace"):
+    try:
+        services.add(json.loads(line).get("service"))
+    except (ValueError, AttributeError):
+        pass
+services.discard(None)
+sys.exit(0 if len(services) >= 3 else 1)
+PY
+}
+show "curl -s \"$BASE_URL/logs/download?limit=500\" -H \"Authorization: Bearer \$SERVICE_TOKEN\""
+wait_until "$LOGS_TIMEOUT_S" "log lines from at least 3 services in Loki" logs_ready
+passed "logs are in Loki"
 
 # ---------------------------------------------------------------- 3. newman
 
