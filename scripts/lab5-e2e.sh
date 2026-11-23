@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # Lab 5, grade 10: the whole stack end to end. Exits non-zero on the first failure.
 #   1. docker compose pull && docker compose up -d (skip with E2E_SKIP_UP=1)
-#   2. wait for the Gateway's and every service's /status through the Gateway
+#   2. wait for the Gateway's and every service's /status through the Gateway, then until
+#      one traced request's lines are in Loki, in order (the gateway collection downloads them)
 #   3. every Postman collection with newman
 #   4. the five demo scripts, with NONINTERACTIVE=1
 #   5. every Prometheus target is up
 #
 #   bash scripts/lab5-e2e.sh
 #
-# Settings: E2E_SKIP_UP=1 (use the stack as it is), E2E_SKIP_DEMOS=1, STATUS_TIMEOUT_S (300).
+# Settings: E2E_SKIP_UP=1 (use the stack as it is), E2E_SKIP_DEMOS=1, STATUS_TIMEOUT_S (300),
+# LOGS_TIMEOUT_S (180: how long to wait for a traced request's lines in Loki).
 # Needs Node.js for newman (npx downloads it on the first run).
 NONINTERACTIVE=1
 source "$(dirname "$0")/lab5-lib.sh"
@@ -65,6 +67,51 @@ for service in $SERVICES; do
   wait_until "$STATUS_TIMEOUT_S" "/$service/status" service_up
 done
 passed "every /status answers 200"
+
+# ---------------------------------------------------------------- 2b. logs in Loki
+
+# On fresh volumes Alloy is still catching up when the services answer /status. The gateway
+# collection's "Download Logs - One Request" downloads the lines of one request and needs
+# them from the Broker and from Applicant, oldest first. So: send one such request with a
+# known X-Request-Id and wait until /logs/download returns its lines from both, in order.
+step "Wait until a traced request's lines are in Loki (Alloy -> Loki), from the Broker and Applicant, in order"
+LOGS_TIMEOUT_S="${LOGS_TIMEOUT_S:-180}"
+PROBE_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+show "curl -s $BASE_URL/applicant/applicants/00000000-0000-4000-8000-000000000000 -H \"Authorization: Bearer \$SERVICE_TOKEN\" -H 'Cache-Control: no-cache' -H 'X-Request-Id: $PROBE_ID'"
+curl -s -o /dev/null --max-time 10 -H "Authorization: Bearer $SERVICE_TOKEN" -H 'Cache-Control: no-cache' \
+  -H "X-Request-Id: $PROBE_ID" "$BASE_URL/applicant/applicants/00000000-0000-4000-8000-000000000000" || true
+probe_logged() {
+  curl -s --max-time 10 -H "Authorization: Bearer $SERVICE_TOKEN" -o "$TMP_DIR/logs.ndjson" \
+    "$BASE_URL/logs/download?requestId=$PROBE_ID" &&
+    python3 - "$TMP_DIR/logs.ndjson" "$PROBE_ID" <<'PY'
+import json, sys
+rows = []
+for line in open(sys.argv[1], errors="replace"):
+    try:
+        rows.append(json.loads(line))
+    except ValueError:
+        pass
+services = {r.get("service") for r in rows}
+times = [r.get("timestamp") or "" for r in rows]
+ok = ({"message-broker", "applicant-service"} <= services
+      and all(r.get("requestId") == sys.argv[2] for r in rows)
+      and times == sorted(times))
+print("%d lines, services %s, in order: %s" % (len(rows), sorted(s for s in services if s), times == sorted(times)))
+sys.exit(0 if ok else 1)
+PY
+}
+show "curl -s \"$BASE_URL/logs/download?requestId=$PROBE_ID\" -H \"Authorization: Bearer \$SERVICE_TOKEN\""
+info "waiting up to ${LOGS_TIMEOUT_S}s: the probe's lines from message-broker and applicant-service, oldest first"
+started=$SECONDS
+until probe_logged >"$TMP_DIR/probe.txt" 2>&1; do
+  if (( SECONDS - started >= LOGS_TIMEOUT_S )); then
+    echo "last answer: $(cat "$TMP_DIR/probe.txt")"
+    fail "the probe's lines did not reach Loki from both services, in order, within ${LOGS_TIMEOUT_S}s"
+  fi
+  sleep 3
+done
+cat "$TMP_DIR/probe.txt"
+passed "logs are in Loki, in order ($((SECONDS - started))s)"
 
 # ---------------------------------------------------------------- 3. newman
 

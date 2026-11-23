@@ -44,7 +44,26 @@ loki.source.docker "containers" {
   host          = "unix:///var/run/docker.sock"
   targets       = discovery.docker.containers.targets
   relabel_rules = discovery.relabel.compose.rules
-  forward_to    = [loki.write.local.receiver]
+  forward_to    = [loki.process.timestamps.receiver]
+}
+
+// Every line keeps the time its service wrote in its own `timestamp` field, not the time
+// Docker received it. Under load (a cold start) lines of different services reach Docker
+// out of the order they were logged in, and the Gateway's /logs/download sorts by Loki's
+// time, so a request traced across services came back out of order. Lines that are not
+// JSON or have no parsable `timestamp` (the databases' own output) keep Docker's time.
+loki.process "timestamps" {
+  forward_to = [loki.write.local.receiver]
+
+  stage.json {
+    expressions = { ts = "timestamp" }
+  }
+
+  stage.timestamp {
+    source            = "ts"
+    format            = "RFC3339"
+    action_on_failure = "skip"
+  }
 }
 
 loki.write "local" {
