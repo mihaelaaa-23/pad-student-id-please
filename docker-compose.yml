@@ -426,7 +426,7 @@ services:
 
   # ==================== Server Moderation Session Service (Mihaela) ====================
   session-service:
-    image: mihaela5/session-service:5.0.0-rc.1
+    image: mihaela5/session-service:5.0.0
     restart: unless-stopped
     # Lab 3, grade 5: two instances; sessions live in session-db, so any instance can
     # serve any session.
