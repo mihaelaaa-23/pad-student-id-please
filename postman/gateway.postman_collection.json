@@ -736,6 +736,206 @@
               ]
             }
           }
+        },
+        {
+          "name": "Cache - Server Rules First Read Is MISS",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('cacheRulesProbe', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('returns the current rules', function () {",
+                  "  const ids = json.rules.map(function (rule) { return rule.id; });",
+                  "  pm.expect(ids).to.include('ONLY_FAF_STUDENTS');",
+                  "  pm.expect(ids).to.include('ACTIVE_STATUS_REQUIRED');",
+                  "  pm.expect(ids).to.include('NO_PREVIOUS_BAN');",
+                  "});",
+                  "pm.test('X-Cache is MISS', function () {",
+                  "  pm.expect(pm.response.headers.get('X-Cache')).to.eql('MISS');",
+                  "});",
+                  "pm.test('X-Cache-Node names a cache node', function () {",
+                  "  pm.expect(pm.response.headers.get('X-Cache-Node')).to.match(/^cache-[1-3]$/);",
+                  "});",
+                  "pm.collectionVariables.set('cacheRulesNode', pm.response.headers.get('X-Cache-Node'));",
+                  "pm.collectionVariables.set('cacheRulesBody', pm.response.text());"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Cache-Control",
+                "value": "max-age=60"
+              }
+            ],
+            "url": "{{gatewayUrl}}/server-rules/rules/current?cacheProbe={{cacheRulesProbe}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{serviceToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cache - Server Rules Second Read Is HIT",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('X-Cache is HIT', function () {",
+                  "  pm.expect(pm.response.headers.get('X-Cache')).to.eql('HIT');",
+                  "});",
+                  "pm.test('served by the same cache node', function () {",
+                  "  pm.expect(pm.response.headers.get('X-Cache-Node')).to.eql(pm.collectionVariables.get('cacheRulesNode'));",
+                  "});",
+                  "pm.test('body matches the first read', function () {",
+                  "  pm.expect(pm.response.text()).to.eql(pm.collectionVariables.get('cacheRulesBody'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Cache-Control",
+                "value": "max-age=60"
+              }
+            ],
+            "url": "{{gatewayUrl}}/server-rules/rules/current?cacheProbe={{cacheRulesProbe}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{serviceToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cache - University Record First Read Is MISS",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('cacheRecordProbe', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('returns the seeded applicant record', function () {",
+                  "  pm.expect(json.applicantId).to.eql('applicant-001');",
+                  "  pm.expect(json.fields).to.be.an('object');",
+                  "});",
+                  "pm.test('X-Cache is MISS', function () {",
+                  "  pm.expect(pm.response.headers.get('X-Cache')).to.eql('MISS');",
+                  "});",
+                  "pm.test('X-Cache-Node names a cache node', function () {",
+                  "  pm.expect(pm.response.headers.get('X-Cache-Node')).to.match(/^cache-[1-3]$/);",
+                  "});",
+                  "pm.collectionVariables.set('cacheRecordNode', pm.response.headers.get('X-Cache-Node'));",
+                  "pm.collectionVariables.set('cacheRecordBody', pm.response.text());"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Cache-Control",
+                "value": "max-age=60"
+              }
+            ],
+            "url": "{{gatewayUrl}}/university-record/records/applicant-001?requestingPlayerId=server-rules-service&cacheProbe={{cacheRecordProbe}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{serviceToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cache - University Record Second Read Is HIT",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('X-Cache is HIT', function () {",
+                  "  pm.expect(pm.response.headers.get('X-Cache')).to.eql('HIT');",
+                  "});",
+                  "pm.test('served by the same cache node', function () {",
+                  "  pm.expect(pm.response.headers.get('X-Cache-Node')).to.eql(pm.collectionVariables.get('cacheRecordNode'));",
+                  "});",
+                  "pm.test('body matches the first read', function () {",
+                  "  pm.expect(pm.response.text()).to.eql(pm.collectionVariables.get('cacheRecordBody'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Cache-Control",
+                "value": "max-age=60"
+              }
+            ],
+            "url": "{{gatewayUrl}}/university-record/records/applicant-001?requestingPlayerId=server-rules-service&cacheProbe={{cacheRecordProbe}}",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{serviceToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          }
         }
       ]
     },
@@ -908,6 +1108,30 @@
     },
     {
       "key": "authHitsBefore",
+      "value": ""
+    },
+    {
+      "key": "cacheRulesProbe",
+      "value": ""
+    },
+    {
+      "key": "cacheRulesNode",
+      "value": ""
+    },
+    {
+      "key": "cacheRulesBody",
+      "value": ""
+    },
+    {
+      "key": "cacheRecordProbe",
+      "value": ""
+    },
+    {
+      "key": "cacheRecordNode",
+      "value": ""
+    },
+    {
+      "key": "cacheRecordBody",
       "value": ""
     }
   ]
