@@ -857,7 +857,7 @@ services:
 
   # ==================== Server Rules Service (Ion) ====================
   server-rules-service:
-    image: ion190/server-rules-service:4.0.1
+    image: ion190/server-rules-service:5.0.0-rc.2
     restart: unless-stopped
     deploy:
       replicas: ${RULES_REPLICAS:-2}
@@ -865,8 +865,10 @@ services:
       PORT: 3005
       GRPC_PORT: 50005
       GRPC_HOST: 0.0.0.0
-      DB_HOST: rules-db
-      DB_PORT: 27017
+      # Lab 5: connect to every member and let the MongoDB driver
+      # discover the current primary after a replica-set election.
+      DB_HOSTS: rules-db-1:27017,rules-db-2:27017,rules-db-3:27017
+      DB_REPLICA_SET: rs-rules
       DB_USER: ${RULES_DB_USER}
       DB_PASSWORD: ${RULES_DB_PASSWORD}
       DB_NAME: ${RULES_DB_NAME}
@@ -880,26 +882,83 @@ services:
       SERVICE_DISCOVERY_URL: http://service-discovery:3010
       SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
     depends_on:
-      rules-db:
-        condition: service_healthy
+      # Wait for the one-shot job to initiate rs-rules and observe a PRIMARY.
+      rules-db-rs-init:
+        condition: service_completed_successfully
       service-discovery:
         condition: service_started
 
-  rules-db:
+  # rules-db: three MongoDB members forming rs-rules.
+  # The first member initializes the root user, seed rules, and ETL read-only user.
+  rules-db-1: &rules-db
     image: mongo:7
     restart: unless-stopped
+    hostname: rules-db-1
+    entrypoint: ["sh", "/mongod-rs.sh"]
     environment:
+      SERVICE_NAME: rules-db-1
+      RS_NAME: rs-rules
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?set MONGO_REPLICA_KEY in .env, see .env.example}
+      MONGO_WT_CACHE_GB: "0.25"
       MONGO_INITDB_ROOT_USERNAME: ${RULES_DB_USER}
       MONGO_INITDB_ROOT_PASSWORD: ${RULES_DB_PASSWORD}
       MONGO_INITDB_DATABASE: ${RULES_DB_NAME}
+      ETL_READER_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
     volumes:
-      - rules_db_data:/data/db
+      - rules_db_1_data:/data/db
+      - ./db/mongo-rs/mongod-rs.sh:/mongod-rs.sh:ro
       - ./db/server-rules-service/init.js:/docker-entrypoint-initdb.d/init.js:ro
     healthcheck:
       test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\""]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+      interval: 10s
+      timeout: 30s
+      retries: 30
+      start_period: 60s
+
+  rules-db-2:
+    <<: *rules-db
+    hostname: rules-db-2
+    environment:
+      SERVICE_NAME: rules-db-2
+      RS_NAME: rs-rules
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?set MONGO_REPLICA_KEY in .env, see .env.example}
+      MONGO_WT_CACHE_GB: "0.25"
+    volumes:
+      - rules_db_2_data:/data/db
+      - ./db/mongo-rs/mongod-rs.sh:/mongod-rs.sh:ro
+
+  rules-db-3:
+    <<: *rules-db
+    hostname: rules-db-3
+    environment:
+      SERVICE_NAME: rules-db-3
+      RS_NAME: rs-rules
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?set MONGO_REPLICA_KEY in .env, see .env.example}
+      MONGO_WT_CACHE_GB: "0.25"
+    volumes:
+      - rules_db_3_data:/data/db
+      - ./db/mongo-rs/mongod-rs.sh:/mongod-rs.sh:ro
+
+  # One-shot rs.initiate(); waits for all members and a writable PRIMARY.
+  rules-db-rs-init:
+    image: mongo:7
+    restart: "no"
+    command: ["sh", "/init-replica-set.sh"]
+    environment:
+      SERVICE_NAME: rules-db-rs-init
+      RS_NAME: rs-rules
+      RS_MEMBERS: rules-db-1:27017,rules-db-2:27017,rules-db-3:27017
+      MONGO_ROOT_USERNAME: ${RULES_DB_USER}
+      MONGO_ROOT_PASSWORD: ${RULES_DB_PASSWORD}
+    volumes:
+      - ./db/mongo-rs/init-replica-set.sh:/init-replica-set.sh:ro
+    depends_on:
+      rules-db-1:
+        condition: service_healthy
+      rules-db-2:
+        condition: service_healthy
+      rules-db-3:
+        condition: service_healthy
 
   # ==================== University Record Service (Ion) ====================
   university-record-service:
@@ -1434,9 +1493,11 @@ services:
       CREDENTIAL_DB_USER: etl_reader
       CREDENTIAL_DB_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
       CREDENTIAL_DB_NAME: ${CREDENTIAL_DB_NAME}
-      RULES_DB_HOSTS: rules-db:27017
-      RULES_DB_USER: ${RULES_DB_USER}
-      RULES_DB_PASSWORD: ${RULES_DB_PASSWORD}
+      RULES_DB_HOSTS: rules-db-1:27017,rules-db-2:27017,rules-db-3:27017
+      RULES_DB_REPLICA_SET: rs-rules
+      # Read from a secondary with a database-scoped read-only account.
+      RULES_DB_USER: etl_reader
+      RULES_DB_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
       RULES_DB_NAME: ${RULES_DB_NAME}
       DISCORD_DMS_DB_HOSTS: discord-dms-db-1:27017,discord-dms-db-2:27017,discord-dms-db-3:27017
       DISCORD_DMS_DB_REPLICA_SET: rs-discord-dms
@@ -1470,7 +1531,11 @@ volumes:
   credential_db_1_data:
   credential_db_2_data:
   credential_db_3_data:
+  # Legacy standalone Rules DB volume retained for backup/migration.
   rules_db_data:
+  rules_db_1_data:
+  rules_db_2_data:
+  rules_db_3_data:
   university_record_db_1_data:
   university_record_db_2_data:
   university_record_db_3_data:
