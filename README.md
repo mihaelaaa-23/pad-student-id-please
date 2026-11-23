@@ -10,6 +10,9 @@ Team 18
 - [Architecture Diagram](#architecture-diagram)
 - [Tech Stack & Communication Patterns](#tech-stack--communication-patterns)
 - [Communication Contract](#communication-contract)
+- [Caching (Lab 5)](#caching-lab-5)
+- [Database Replication (Lab 5)](#database-replication-lab-5)
+- [Data Warehouse and ETL (Lab 5)](#data-warehouse-and-etl-lab-5)
 - [Logging Convention](#logging-convention)
 - [Development Guidelines](#development-guidelines)
 - [Microservice Repositories](#microservice-repositories)
@@ -106,7 +109,7 @@ It transports messages but does **not** determine whether the information shared
 
 The single entry point of the system, added in Lab 2. Every REST request — from the client and between services — goes through the Gateway, which forwards it to the service that owns the resource. It also owns the concerns that belong at the edge: validating the `Authorization` header (and not forwarding it downstream), negotiating WebSocket connections by giving the client a URL to connect to Discord DMs Service directly, and enforcing its own task timeout and concurrent task limit.
 
-**Database:** none. The Gateway is stateless and holds no business data.
+**Database:** none. The Gateway holds no business data. Since Lab 5 it keeps a cache of answers and verified tokens in three Valkey nodes (see Caching): copies that can be lost at any time, never the source of truth.
 
 It does **not** own any player, session, applicant, credential, rule, record, decision, or message data, and it does not make business decisions (admission, rule evaluation, scoring) — those stay with the services behind it. It also does not carry WebSocket traffic: once a connection is negotiated, the client talks to Discord DMs Service directly.
 
@@ -123,11 +126,18 @@ The **Message Broker** (`:3011` HTTP, `:50011` gRPC, Python, one instance) is in
 - **Topic events** (purple): a service publishes an event to the Broker, which keeps it in a queue per subscribing service and delivers it to one instance of each, retrying with backoff and moving it to the Dead Letter Channel when it cannot be delivered. `session.ended` (Session → Player: the shift XP), `decision.recorded` (Moderation → Discord DMs: the verdict) and `applicant.created` (Applicant → University Record). Delivery is at least once, so every subscriber applies an event once per event id.
 - Every HTTP request and every gRPC call runs on its own thread in the Broker. `GET /topics` and `GET /dead-letters` show the queues, and `GET /metrics` is scraped by **Prometheus**, shown in **Grafana** (orange, dashed).
 
-Every service except Discord DMs runs as 2–3 replicas (stacked boxes) behind one service name, and all replicas of a service share its private database (green: MongoDB, blue: PostgreSQL), labelled with the database name. Discord DMs runs as one instance, because `:3008` is published to the host and a message sent to one replica would not reach sockets connected to another.
+Every service except Discord DMs runs as 2–3 replicas (stacked boxes) behind one service name, and all replicas of a service share its private database (green: MongoDB, blue: PostgreSQL), labelled with the database name. Since Lab 5 each database is itself three nodes, a primary and two replicas. Discord DMs runs as one instance, because `:3008` is published to the host and a message sent to one replica would not reach sockets connected to another.
 
 **Service Discovery** (`:3010`, Python, one instance, in-memory registry) is the one REST exception to "everything goes through the Gateway", because the Gateway and the Broker depend on it. Each instance registers on startup with its `url`, and since Lab 4 its `grpcUrl` and the `topics` it subscribes to, sends a heartbeat every 10 s and deregisters on shutdown; Service Discovery calls every instance's `/status` every 5 s (purple, dashed). The Broker reads the healthy instances from it and reports instances whose breaker tripped (teal). When an instance changes state or its load becomes critical, Service Discovery alerts the developers (red, dashed).
 
 Published to the host: the Gateway (`:3000`), the Discord DMs WebSocket (`:3008`), and for monitoring Prometheus (`:9090`) and Grafana (`:3100`); everything else stays inside the Docker Compose network. Prometheus scrapes `/metrics` from inside the network.
+
+**Lab 5** adds:
+
+- **The cache ring behind the Gateway.** Three Valkey nodes, `cache-1..3`. The Gateway caches common `GET` answers and verified tokens in them, sharded by its own consistent-hash ring (see Caching).
+- **Every database as a 3-node cluster.** The four PostgreSQL databases run on Spilo (Patroni), with **etcd** holding each cluster's leader lock and **`pg-router`** (HAProxy) sending each service to its cluster's current leader. The four MongoDB databases are replica sets (see Database Replication).
+- **The transaction coordinators in the Message Broker.** A moderation decision is a two-phase commit over Moderation's and Session's databases, and applicant intake a saga over Applicant's and Credential's (see Transactions).
+- **The Data Warehouse.** `warehouse-db` and the `etl` job that copies every service database into it, reading only from replicas (see Data Warehouse and ETL).
 
 **Service Relationships**
 
@@ -155,7 +165,7 @@ Used for Moderation Service and Discord DMs Service. Moderation Service calls fo
 
 **Python**
 
-Used only for the Gateway, as Lab 2 requires. Its framework and libraries are documented in the Gateway's own README.
+Used only for the common components: the Gateway (Lab 2 requires it), Service Discovery (Lab 3), the Message Broker (Lab 4) and the ETL script (Lab 5). Their frameworks and libraries are documented in their own READMEs.
 
 **Databases**
 
@@ -174,6 +184,20 @@ Following the database-per-service rule below, each service picked PostgreSQL or
 
 The Gateway has no database (see its Service Boundaries entry).
 
+**Infrastructure (Lab 5)**
+
+| Component | Image | What for |
+|---|---|---|
+| Valkey | `valkey/valkey:8.0-alpine` ×3 | the Gateway's cache, sharded by its own ring (Caching) |
+| Spilo (PostgreSQL 16 + Patroni) | `ghcr.io/zalando/spilo-16:3.3-p1` ×12 | the four PostgreSQL databases, three nodes each, with automatic failover |
+| etcd | `quay.io/coreos/etcd:v3.5.17` | the leader lock of every Patroni cluster |
+| HAProxy | `haproxy:3.0-alpine` (`pg-router`) | a fixed address per PostgreSQL cluster that always reaches the leader, and one for its replicas |
+| MongoDB replica sets | `mongo:7` ×12 | the four MongoDB databases, three members each |
+| PostgreSQL | `postgres:16-alpine` (`warehouse-db`) | the Data Warehouse |
+| Python | `python:3.12-slim` (`etl`) | the ETL script |
+
+Valkey and not Redis because Valkey is the open-source (BSD) fork of Redis 7.2, with the same protocol, so the Gateway uses the standard `redis` Python client. Spilo because it packages PostgreSQL with Patroni in one image, so failover needs no code in the services.
+
 ## Communication Contract
  
 ### Data Management Across Microservices
@@ -187,6 +211,11 @@ This has a few direct consequences for how the system behaves:
 - **Status in Lab 1:** mutual initialization is the target design, not current behaviour. No service propagates records yet, so an applicant generated by Applicant Service exists only there, and University Record Service answers `404` for it (no record exists). Applicant Service only *reads* from University Record Service (on `GET /applicants/{id}` for an applicant it doesn't hold).
 - **Read-heavy orchestration, not a shared cache.** Session Service and Moderation Service don't hold their own copies of applicant/credential/rule/record data — every shift and every decision re-queries the four data services live. We're intentionally trading a bit of latency for never having stale applicant data during a shift.
 - **Eventual, not transactional, consistency.** Because propagation between Applicant/Credential/University Record happens as separate API calls rather than a single database transaction, it's possible for one of the three to succeed and another to fail or lag. For Lab 1 we're accepting this risk rather than introducing a message broker; if this becomes a real problem in testing, promoting the mutual-init calls to an event-driven pattern is the natural next step, but it's out of scope for now.
+- **Since Lab 5:**
+  - **The one exception to database-per-service** is the ETL job: it reads every service database, read-only, from replicas, and writes only to the Data Warehouse (see Data Warehouse and ETL). No service reads the warehouse.
+  - **Each database is a 3-node cluster** (see Database Replication); a service still owns exactly one database.
+  - **Writes across two databases:** 2PC for a moderation decision (Moderation and Session, both PostgreSQL), a saga for applicant intake (Applicant and Credential, both MongoDB), and events, delivered at least once, for everything else (see Transactions).
+  - **The Gateway's cache** holds copies of answers whose staleness is bounded by each route's TTL (see Caching). Session and Moderation still re-query the data services for every applicant and decision.
 - **Credentials never travel in the diagram or the repo.** Each service's Docker setup expects DB connection details via environment variables (see each service's own README), and none of those values are committed — only `.env.example` placeholders.
  
 ### Endpoints
@@ -210,6 +239,8 @@ The single entry point of the system (Lab 2). Clients call `http://localhost:300
 |---|---|---|---|
 | GET | /status | — | `{service: "gateway", status: string, time: string}` |
 | POST | /ws/negotiate | `{sessionId: string, channel: string, playerId?: string}` | `{url: string, ticket: string, expiresAt: string}` |
+| GET | /cache/ring | — (service token) | `{vnodes: int, nodes: [{node: string, state: "up" \| "down", keys: int\|null, share: float\|null}]}` (Lab 5) |
+| GET | /cache/ring/lookup | `?key=string` (service token) | `{key: string, node: string}` (Lab 5) |
 | any | /{prefix}/{service path} | forwarded unchanged | the service's response, unchanged |
 
 Notes for callers:
@@ -265,6 +296,7 @@ Notes for callers:
 
   Besides these, the Gateway answers `404 NOT_FOUND` for a path with no service prefix at all (e.g. `GET /`) and `500 INTERNAL_ERROR` for an unexpected error of its own.
 - Routes not exposed (Lab 4, grade 8). Since the services call each other through the Message Broker, a route only another service calls is not reachable through the Gateway: it answers `404 ROUTE_NOT_FOUND` without forwarding it, for every caller, the service token included. The list is `INTERNAL_ROUTES` in the Gateway's `app/internal_routes.py`, one line per route, added by the service's owner: so far `PATCH /player/players/{id}/xp`, `POST /applicant/applicants/generate` (Session's `GenerateApplicant`) and `POST /credential/credentials/{applicantId}/validate` (Session's and Moderation's `ValidateCredential`). Applicant's and Credential's other routes stay public: they are the CRUD of Lab 1. A path with a `.` or `..` segment (also encoded) is refused the same way, since the forwarding client would remove it and the service could receive an internal route the check never saw.
+- **Cache (Lab 5, grades 6 and 7).** Every answer to a cacheable `GET` carries `X-Cache: HIT | MISS | BYPASS` and `X-Cache-Node`; a request with `Cache-Control: no-cache` is a `BYPASS`. The token of a player that no longer exists is answered `401 UNAUTHORIZED` ("The player of this token no longer exists"). `GET /cache/ring` and `GET /cache/ring/lookup` are for the service token only (`403 FORBIDDEN` for a player) and answer `503 DEPENDENCY_UNAVAILABLE` without a cache. Routes, TTLs and invalidation are in Caching.
 - The Discord DMs WebSocket is not proxied: clients connect to it directly after negotiating with the Gateway. A long-lived socket proxied through the Gateway would hold one of its slots for a whole shift, so the Gateway authorises the connection up front and then steps out of the way.
 
   **Negotiating a socket.** `POST /ws/negotiate` with `{sessionId, channel}` answers `{url, ticket, expiresAt}`. A missing or empty `sessionId` or `channel` is `422 VALIDATION_FAILED`, as everywhere else in this contract. The call is an ordinary request through the Gateway, so it counts against `MAX_CONCURRENT_TASKS` like any other; only the socket it authorises stays outside. The client then opens `<url>?ticket=<ticket>`, which is a direct connection to Discord DMs Service on its published WebSocket port. `url` is the address the *client* can reach, from the Gateway's `DISCORD_DMS_WS_PUBLIC_URL` (in the shared stack `ws://localhost:3008`) — not the in-network name, which a client outside the compose network cannot resolve.
@@ -359,8 +391,15 @@ The messaging layer between the Gateway and the services, and between the servic
 | GET | /dead-letters | `?topic=string&subscriber=string&limit=int` (limit 1-200, default 50) | `{count: int, items: [deadLetter]}` |
 | GET | /metrics | — | Prometheus text format |
 | GET | /status | — | `{service: "message-broker", status: string, time: string, load: load}` |
+| GET | /transactions | `?state=string&limit=int` (state `preparing`, `committed` or `aborted`, may repeat; limit 1-200, default 50) | `{count: int, items: [transaction]}`, newest first (Lab 5) |
+| GET | /sagas | `?state=string&limit=int` (state `running`, `compensating`, `completed`, `compensated` or `failed`, may repeat; limit 1-200, default 50) | `{count: int, items: [saga]}`, newest first (Lab 5) |
+| GET | /sagas/{id} | — | `saga`; `404 SAGA_NOT_FOUND` (Lab 5) |
 
 `deadLetter` is `{id: string, eventId: string, topic: string, subscriber: string, source: string, requestId: string, payload: JSON value or {contentType: string, base64: string} for non-JSON content, reason: string, attempts: int, lastError: string, firstAttemptAt: string, deadAt: string}`.
+
+`transaction` is `{txId: string, type: string, state: string, requestId: string, createdAt: string, decidedAt: string|null, branches: [{index: int, service: string, action: string, vote: string|null, reason: string|null, state: string, attempts: int, lastError: string|null, payload: object}]}`.
+
+`saga` is `{sagaId: string, type: string, state: string, requestId: string, steps: [{index: int, service: string, action: string, state: string, attempts: int, compensateAttempts: int, lastError: string|null}], context: object}`; `context` never carries the applicant's `scenario`.
 
 Notes for callers:
 
@@ -388,6 +427,7 @@ Notes for callers:
 - **Topics (Lab 4, grade 7).** `GET /topics` lists every topic in the event catalogue (see Messaging), its publisher and the services subscribed to it: the Broker's own subscription list (see Messaging, "Subscribing").
 - **Dead Letter Channel (Lab 4, grade 9).** `GET /dead-letters` lists the events the Broker gave up delivering, newest first, filtered by `topic` and/or `subscriber`. `payload` is the event payload decoded as JSON. `reason` is `max_attempts` (still failing after `MAX_DELIVERY_ATTEMPTS`) or `rejected` (the subscriber answered with a status that retrying cannot fix).
 - `GET /status` and `GET /metrics` are outside the concurrency limit, like every service's `/status`.
+- **Transactions and sagas (Lab 5, grades 8 and 9).** `GET /transactions` and `GET /sagas` show the coordinators' logs (see Transactions). Service token only, inside the network, like every other Broker route.
 - The Broker registers itself with Service Discovery as `message-broker`, like every service.
 - Errors use the shared envelope `{error: {code: string, message: string}}`.
 
@@ -418,7 +458,7 @@ Notes for callers:
 |---|---|---|---|
 | POST | /sessions | `{moderatorId: string, juniorIds?: string[]}` | `201` + `{sessionId: string, status: string}` |
 | POST | /sessions/{id}/join | `{playerId: string, role: "moderator" \| "junior"}` | `{sessionId: string, role: string, status: string}` |
-| GET | /sessions/{id} | — | `{sessionId: string, currentApplicantId: string, processedCount: int, score: int, status: string}` |
+| GET | /sessions/{id} | — | `{sessionId: string, currentApplicantId: string, processedCount: int, score: int, decisionsApplied: int, status: string}` |
 | POST | /sessions/{id}/end | — | `{sessionId: string, result: string, score: int}` |
 | POST | /sessions/{id}/process-applicant | — | `{sessionId: string, processedCount: int, currentApplicantId: string, applicant: object, credentialCheck: object, rulesCheck: object, universityRecords: object}` — `502 DEPENDENCY_REFUSED` when a dependency refuses the request, `503 DEPENDENCY_UNAVAILABLE` when one is unavailable |
 | GET | /status | — | `{status: string, database: string, load: load}` — `503` with `status: "degraded"` and `database: "down"` when PostgreSQL is unreachable |
@@ -427,6 +467,7 @@ Notes for callers:
 Notes for callers:
 
 - `POST /sessions/{id}/end` awards XP to every participant (currently 10 XP per processed applicant, a placeholder until Moderation Service scoring is integrated): since Lab 4 by publishing one `session.ended` event to the Message Broker (`BROKER_GRPC_URL`, see Messaging), which Player Service applies once per event; without `BROKER_GRPC_URL`, through Player Service's `PATCH /players/{id}/xp` as in Lab 3. Ending is one-time: a second call returns `409 CONFLICT`, so XP is never awarded twice. A `Publish` that fails never fails the `end`: every player who does not get the XP is logged at `ERROR`.
+- `decisionsApplied` (Lab 5, grade 8) counts the moderation decisions applied to the shift's `score` through the two-phase commit (see Transactions). Session votes NO on a decision for an ended or unknown shift.
 - `POST /sessions/{id}/join` returns `409 CONFLICT` when the player is already in the session, when a second moderator tries to join, or when the session has ended. An unknown `role` is `422`.
 - `POST /sessions/{id}/process-applicant` on an ended session returns `409 CONFLICT`.
 - `process-applicant` generates an applicant through Applicant Service, creates its credential with `POST /credentials/{applicantId}` (reading it with `GET` if it already exists), evaluates rules with `POST /rules/evaluate` sending the full applicant, and reads records with `GET /records/{applicantId}?requestingPlayerId=<moderatorId>`.
@@ -451,6 +492,12 @@ Notes for callers:
 | GET | /applicants | `?role=string&limit=int&cursor=string` (limit 1-100, default 20) | `{items: [applicant], nextCursor: string\|null}` |
 | PATCH | /applicants/{id} | any subset of `{name, major, year, role, status}` | the full applicant shape |
 | DELETE | /applicants/{id} | — | `{applicantId: string, deleted: boolean}` |
+| POST | /applicants/intake | `{seed?: int, scenario?: string, simulateFailAt?: string}` | `202` + `{sagaId: string, state: string, applicantId?: string}` while the saga runs, `200` with the same shape when it already finished (Lab 5) |
+| GET | /applicants/intake/{sagaId} | — | `{sagaId: string, type: string, state: string, steps: [{index: int, service: string, action: string, state: string, attempts: int, lastError: string\|null}], context: object}`; `404 SAGA_NOT_FOUND` (Lab 5) |
+
+Notes for callers:
+
+- **Intake (Lab 5, grade 9)** creates an applicant and its credential as one saga, `applicant.intake`, coordinated by the Message Broker (see Transactions). `GET` answers the Broker's saga (Message Broker) without `requestId` and `compensateAttempts`, with `scenario` removed from `context`; `applicantId` is in the `POST` answer and in `context` once step 1 is done. `simulateFailAt` is the test hook and is ignored unless the named service runs with `ENABLE_TEST_HOOKS=true`.
  
 #### Credential Service
 | Method | Path | Request | Response |
@@ -597,7 +644,7 @@ The service uses PostgreSQL with a persistent Docker volume.
 | Method | Path | Request | Response |
 |---|---|---|---|
 | GET | /status | — | `{service: string, status: string, database: string, time: string, load: load}` |
-| POST | /moderation/decide | `{sessionId: string, applicantId: string, decision: string, decidedBy?: string}` | `201` + `{decisionId: string, sessionId: string, applicantId: string, decision: string, expectedDecision: string, correct: boolean, violatedRules: string[], penalty: int, decidedBy?: string, sources: object, createdAt: string, updatedAt?: string}` plus `announcedInChat: boolean` |
+| POST | /moderation/decide | `{sessionId: string, applicantId: string, decision: string, decidedBy?: string}` | `201` + `{decisionId: string, sessionId: string, applicantId: string, decision: string, expectedDecision: string, correct: boolean, violatedRules: string[], penalty: int, decidedBy?: string, sources: object, createdAt: string, updatedAt?: string}` plus `announcedInChat: boolean` and `transactionId: string` (Lab 5) |
 | GET | /moderation/{decisionId} | — | the decision shape |
 | PATCH | /moderation/{decisionId} | `{decision: string, decidedBy?: string}` | the decision shape, plus `announcedInChat: boolean` |
 | DELETE | /moderation/{decisionId} | — | — (`204`, no body) |
@@ -607,6 +654,7 @@ The service uses PostgreSQL with a persistent Docker volume.
 Notes for callers:
 
 - `decision` is `accept`, `reject`, `flag` or `ban`.
+- **Two-phase commit (Lab 5, grade 8).** `POST /moderation/decide` stores the decision and applies it to the shift's score in one transaction across Moderation's and Session's databases, coordinated by the Message Broker (see Transactions); `transactionId` is its `txId`. When a participant votes NO (Session for an ended shift), nothing is stored and the answer is `409 TX_ABORTED`, with every vote in `details`. When the coordinator cannot be reached, `503 TX_COORDINATOR_UNAVAILABLE`.
 - A second `POST /moderation/decide` for the same applicant in the same session is `409`.
 - `violatedRules` carries the rule ids returned by Server Rules Service, the credential issue codes prefixed with `credential: `, and record findings prefixed with `record: `.
 - Every outgoing call carries `Authorization: Bearer <SERVICE_TOKEN>` when `SERVICE_TOKEN` is set (Lab 2, grade 10). This service never checks a token itself: the Gateway is the only place one is verified, and it strips the header before forwarding. A dependency answering `401` is a refused lookup, so the decision is answered `502 DEPENDENCY_REFUSED`.
@@ -791,6 +839,16 @@ Two features write to more than one database. A moderation decision runs as a **
 - **Circuit breakers in the services:** removed once a service calls its dependencies through the Broker (grade 5). The Broker sees every caller's traffic to an instance, while two breakers in a row would count the same failures twice. The services keep their per-call timeout, sent as `X-Timeout-Ms` and later as the gRPC deadline, and their `502`/`503` handling. Reports to Service Discovery now come only from the Broker (`reporter: "message-broker"`).
 - **Logs for the download endpoint (grade 4):** the services keep writing the Logging Convention's JSON lines to stdout. Grafana Alloy reads the stdout of every compose container through the Docker API (socket mounted read-only into Alloy only) and pushes it to Loki, labelled `service` with the compose service name, kept 24 h. The Gateway's `GET /logs/download` queries Loki's HTTP API and returns the lines as NDJSON, for the service token only (see Log Collection). No service changed, and the Gateway never touches the Docker socket. Alloy rather than Promtail: Promtail is deprecated in favour of Alloy and no longer gets releases.
 
+#### Decisions for Lab 5
+
+- **Data Warehouse in PostgreSQL**, a star schema with three views, and **ETL as a script**, which the lab allows: one Python file run by compose every `ETL_INTERVAL_S`, with full-snapshot upserts so a pass can be repeated at any time.
+- **The ETL reads replicas directly** as a read-only `etl_reader`, the one exception to database-per-service. Going through the services' APIs would put the whole dataset through the Gateway and the Broker every minute and miss fields no API returns.
+- **Spilo + etcd + HAProxy for PostgreSQL**, so no service code changed: the services connect to `pg-router`, which follows the leader. **Replica sets for MongoDB**, which the driver follows by itself.
+- **Valkey in the Gateway with our own ring, not Redis Cluster**: the cache holds copies that may be lost, so three independent nodes behind a client-side ring are enough, and the ring is what grade 7 asks us to build (see Caching).
+- **Cache staleness bounded by TTLs.** Writes through the Gateway invalidate at once by version; writes it never sees (events, saga steps, the session branch of a 2PC) expire within the route's TTL.
+- **2PC on the two PostgreSQL databases, a saga on the two MongoDB ones.** PostgreSQL can hold a prepared transaction until the coordinator decides; MongoDB cannot, so intake uses local writes with compensations.
+- **Both coordinators in the Message Broker**, which already has a durable SQLite log and a gRPC connection to every service, so no new component was needed and a restart resumes every transaction and saga.
+
 ### Circuit Breaker
 
 Every service that calls another service wraps those calls in a circuit breaker (Lab 3, grades 7 and 10). These rules are shared: the Node services copy one reference implementation, Discord DMs and Moderation implement the same behaviour in Go, and the Gateway applies it to its upstreams. No call to Service Discovery is wrapped: not `register`, `heartbeat`, `DELETE` or `report` from the services, and not Service Discovery's own health polls. Moderation's verdict announcement to Discord DMs is not wrapped either: it is best-effort (see the timeout budget), so its failures are logged at `WARN` and never counted.
@@ -908,6 +966,144 @@ Which documents a role is expected to hold:
 | `outsider` | none |
 
 An outsider holding no university documents is therefore reported as `valid: true` with no issues. Credential Service validates documents, not admission: rejecting an outsider is Moderation Service's decision, based on the current server rules.
+
+## Caching (Lab 5)
+
+Grades 6 and 7. The Gateway caches the answers of the most common `GET` routes and the result of checking a player token, in three standalone Valkey nodes (`cache-1..3`, `valkey/valkey:8.0-alpine`, 64 MB each with `allkeys-lru`, no persistence). Keys are spread over the nodes by our own consistent-hash ring, not by Redis Cluster. The code is in the Gateway's `app/cache/`; its README has the implementation notes.
+
+**Response cache (grade 6).** Cache-aside: on a `GET` of a route in the table, the Gateway answers from the cache when it can, otherwise forwards the request and stores a `200` answer of up to 256 KB for the route's TTL.
+
+| Route (through the Gateway) | Resource | TTL |
+|---|---|---|
+| `GET /player/players/{id}` | `player:{id}` | 15 s |
+| `GET /session/sessions/{id}` | `session:{id}` | 5 s |
+| `GET /applicant/applicants/{id}` | `applicant:{id}` | 60 s |
+| `GET /credential/credentials/{applicantId}` | `credential:{applicantId}` | 60 s |
+| `GET /server-rules/rules/current` | `rules:current` | 30 s |
+| `GET /university-record/records/{applicantId}` | `record:{applicantId}` | 60 s |
+| `GET /moderation/sessions/{id}/summary` | `moderation-summary:{id}` | 5 s |
+
+- **Key.** `resp:v1:<resource>:<version>:<sha1(path + sorted query + caller scope)>`. The caller scope is `svc` for the service token or `p:<playerId>` for a player, so one player never gets another player's cached answer.
+- **Invalidation by version.** Each resource has a version key `ver:<resource>` holding a random token. A successful write through the Gateway replaces the token, so entries stored under the old one are never read again and expire by their TTL:
+
+  | Write (successful, through the Gateway) | Invalidates |
+  |---|---|
+  | `PATCH`, `DELETE /player/players/{id}` | `player:{id}` |
+  | `POST /session/sessions/{id}/…` (`process-applicant`, `join`, `end`), `DELETE /session/sessions/{id}` | `session:{id}` |
+  | `POST /moderation/moderation/decide` | `session:{sessionId}`, `moderation-summary:{sessionId}` (from the body) |
+  | `PATCH`, `DELETE /applicant/applicants/{id}` | `applicant:{id}` |
+  | `POST`, `PATCH`, `DELETE /credential/credentials/{applicantId}` | `credential:{applicantId}` |
+  | `PUT`, `DELETE /university-record/records/{applicantId}` | `record:{applicantId}` |
+
+  A random token rather than a counter: a lost version key (its node ejected, evicted by LRU, restarted) is recreated with a fresh token, so it can never fall back to an old number and bring old entries back. Writes that do not pass the Gateway (topic events, the saga's steps, the session branch of a 2PC) are not seen by it, so the TTLs are the bound on staleness: at most 60 s for applicants, credentials and records, 5 s for a shift's score.
+- **Headers.** Every answer to a cacheable route carries `X-Cache: HIT | MISS | BYPASS`, and `X-Cache-Node` with the node that holds the key. `Cache-Control: no-cache` on the request is a `BYPASS`: the request goes to the service and nothing is read or stored.
+
+**Auth cache (grade 6).** A verified player token is cached as `auth:tok:<sha256(token)>` → `{playerId, exp, playerVersion}` for `min(AUTH_CACHE_TTL_S, exp − now)` (60 s by default). On a miss the Gateway verifies the JWT and looks the player up through the Broker with the service token. A player that no longer exists is `401 UNAUTHORIZED` ("The player of this token no longer exists"), so a deleted player's token stops working at once. `PATCH` or `DELETE` of the player replaces the version of `player:{id}` and so drops the cached entry. A lookup that fails for another reason accepts the verified token without caching it.
+
+**Sharding over the ring (grade 7).**
+
+- **Ring.** Each node is placed on the ring at 160 virtual points, `MD5("<node>#<i>")` (first 8 bytes); a key belongs to the first point clockwise from `MD5(key)`. Going from 3 to 4 nodes moves about 25 % of the keys (ideally 1/4), against about 75 % with `hash % N`; with 160 virtual nodes each of 3 nodes holds about a third. `python -m app.cache.ring --keys 10000 --nodes 3 --add 1` in the Gateway prints the measured numbers.
+- **Failures.** Every cache call has a `CACHE_TIMEOUT_MS` (50 ms) deadline and no retry. The cache **fails open**: an error or a timeout is a miss or a skipped write, never an error to the client. After `CACHE_NODE_FAILURES_TO_EJECT` (3) errors in a row a node leaves the ring, and only its keys move to the next node. Every `CACHE_NODE_RETRY_S` (10 s) the Gateway pings it; once it answers, it is flushed (`FLUSHDB`, since what it still holds may be stale) and put back. At most `CACHE_MAX_CONNECTIONS` (64) calls per node are in flight; a call that gets no slot in time is a `busy` miss and does not count towards ejection.
+- **Inspecting the ring** (service token only; a player token is `403 FORBIDDEN`):
+
+  | Method | Path | Response |
+  |---|---|---|
+  | GET | /cache/ring | `{vnodes: int, nodes: [{node: string, state: "up" \| "down", keys: int\|null, share: float\|null}]}` — `keys` is the node's key count, `share` its fraction of all keys (`null` for every node when one count can't be read) |
+  | GET | /cache/ring/lookup | `?key=string` → `{key: string, node: string}`, the node the key belongs to now |
+
+  Both answer `503 DEPENDENCY_UNAVAILABLE` when the cache is not configured.
+
+**Why our own ring and not Redis Cluster.** Redis Cluster splits the key space into 16 384 hash slots (CRC16 of the key), assigns slots to masters, reshards by moving slots, and redirects clients with `MOVED`/`ASK`. It needs at least three masters plus replicas and a cluster-aware client, and multi-key operations only work within one slot. Our cache holds copies that can be lost at any time, so a client-side ring over independent nodes gives the same "a node change moves about 1/N of the keys" with no cluster to run. The full comparison and the measurements are in [`docs/consistent-hashing.md`](docs/consistent-hashing.md).
+
+**Metrics** (Gateway): `cache_requests_total{kind,result}` (`kind` `response` or `auth`; `result` `hit`, `miss`, `bypass` or `error`), `cache_node_requests_total{node,result}` (`ok` or `error`), `cache_ring_nodes{state}` and `cache_invalidations_total{resource_type}`. **Logs**: `cache hit` / `cache miss` / `cache bypass` with `resource` and `node`, `cache invalidated` with the new version, `cache node ejected` / `cache node restored`.
+
+## Database Replication (Lab 5)
+
+Grade 5. Every service database is a cluster of three nodes: one primary that takes the writes and two replicas that follow it. When the primary stops, a replica takes over and the service keeps working, with no change in any PostgreSQL service's code.
+
+| Database | Engine | Nodes | Leader / primary for the service | Replicas, read-only (the ETL) |
+|---|---|---|---|---|
+| `player-db` | PostgreSQL 16 (Spilo) | `player-db-1..3` | `pg-router:5401` | `pg-router:5501` |
+| `session-db` | PostgreSQL 16 (Spilo) | `session-db-1..3` | `pg-router:5402` | `pg-router:5502` |
+| `university-record-db` | PostgreSQL 16 (Spilo) | `university-record-db-1..3` | `pg-router:5406` | `pg-router:5506` |
+| `moderation-db` | PostgreSQL 16 (Spilo) | `moderation-db-1..3` | `pg-router:5407` | `pg-router:5507` |
+| `applicant-db` | MongoDB 7, replica set `rs-applicant` | `applicant-db-1..3` | the driver finds the primary | `readPreference=secondaryPreferred` |
+| `credential-db` | MongoDB 7, `rs-credential` | `credential-db-1..3` | the driver finds the primary | `secondaryPreferred` |
+| `rules-db` | MongoDB 7, `rs-rules` | `rules-db-1..3` | the driver finds the primary | `secondaryPreferred` |
+| `discord-dms-db` | MongoDB 7, `rs-discord-dms` | `discord-dms-db-1..3` | the driver finds the primary | `secondaryPreferred` |
+
+**PostgreSQL: Spilo, etcd and `pg-router`.**
+
+- **Spilo** (`ghcr.io/zalando/spilo-16:3.3-p1`) is PostgreSQL with **Patroni**, which runs each node, streams the WAL from the leader to the replicas and handles failover. The three nodes of a cluster share a `SCOPE` (the cluster name, e.g. `player-db`).
+- **etcd** (`quay.io/coreos/etcd:v3.5.17`, one node) holds each cluster's leader lock. The leader renews it; when it stops renewing (the node is stopped or cut off), the lock expires, the replica furthest ahead takes it and is promoted, and the others follow the new leader. The old leader rejoins as a replica when it starts again.
+- **`pg-router`** (`haproxy:3.0-alpine`, config in `infra/pg-router/haproxy.cfg`) gives every cluster two fixed addresses. On the `54xx` port it health-checks every node's Patroni REST API (`GET /primary` on `8008`, every 2 s) and sends connections only to the node that answers `200`, so the services always reach the leader. On the `55xx` port it checks `GET /replica` the same way. When the leader changes, its connections are closed (`on-marked-down shutdown-sessions`) and the service's pool reconnects through the same address to the new leader. The port is `5400 + n` / `5500 + n` with `n` the service's number (Player 1, Session 2, University Record 6, Moderation 7).
+- **Advertised by hostname.** Each node's `SPILO_CONFIGURATION` sets its `connect_address` (PostgreSQL and the REST API) to its compose hostname, not to the container's IP, because Docker can give a container a different IP after a restart and the cluster would then look for a member that no longer exists.
+- **Setup.** A one-shot `<db>-init` job (`postgres:16-alpine`, `db/postgres-ha/init-app-db.sh`) waits for the leader, creates the service's database and user and the read-only `etl_reader`, and runs the service's `db/<service>/init.sql` once, when it creates the database. The service starts after the job has finished. Session and Moderation run with `max_prepared_transactions = 64`, set in Patroni's bootstrap configuration and on every node, for the two-phase commit (Transactions).
+
+**MongoDB: replica sets.**
+
+- Each member runs `mongod --replSet <name>` with a shared keyfile (`MONGO_REPLICA_KEY`) that the members use to authenticate to each other (`db/mongo-rs/mongod-rs.sh`). A one-shot `<db>-rs-init` job runs `rs.initiate` with the three members (`db/mongo-rs/init-replica-set.sh`) and waits for a primary; the service starts after it.
+- The root user, `etl_reader` and the service's `init.js` are created on member 1 only, before the set is initiated, and reach the others through replication.
+- Member 1 has priority 2, the others 1: after a failover, when member 1 is back and has caught up, it is elected primary again, so expect a second, short election.
+- The services connect with `DB_HOSTS` (the three members) and `DB_REPLICA_SET` instead of `DB_HOST`/`DB_PORT`; their URI carries `replicaSet`, `authSource=admin`, `retryWrites=true` and `w=majority`, so a write is acknowledged only once a majority has it and survives the primary's loss. On a failover the driver finds the new primary by itself. Discord DMs takes the same in its `MONGODB_URI`.
+
+**Seeing it.**
+
+```bash
+docker compose exec -T player-db-1 patronictl list
+docker compose exec -T applicant-db-1 mongosh -u "$APPLICANT_DB_USER" -p "$APPLICANT_DB_PASSWORD" --authenticationDatabase admin --quiet --eval 'rs.status().members.forEach(m => print(m.name, m.stateStr))'
+bash scripts/lab5-grade5-failover.sh
+```
+
+`patronictl list` shows one `Leader` and two `Replica`s in state `streaming`; `rs.status()` one `PRIMARY` and two `SECONDARY`. The demo script stops the leader of `player-db` and the primary of `rs-applicant`, shows the new one being elected and the service still answering, and starts the old node again. In our runs Patroni promoted a replica in a few seconds and Mongo elected a new primary in under 15 s.
+
+**Known limits.**
+
+- **One etcd node.** It only coordinates failover. While it is down nothing fails over, but the current leaders stay leaders and the services keep working; it is not a single point of failure for the data.
+- **One `pg-router`.** If it stops, the PostgreSQL services lose their database until it is back (`restart: unless-stopped`). It holds no state, so a second instance behind a virtual IP would remove this; out of scope for the lab.
+- **The warehouse is not replicated.** It holds no data of its own: every ETL pass copies the full current state of every service database, so a lost warehouse is rebuilt by the next pass.
+
+## Data Warehouse and ETL (Lab 5)
+
+Grade 4. A PostgreSQL warehouse (`warehouse-db`, `postgres:16-alpine`, database `WAREHOUSE_DB_NAME`) holds a copy of every service's data in a star schema, for analytics on how the game is played. An ETL script (`etl/etl.py`, Python, compose service `etl`) fills it every `ETL_INTERVAL_S` (60 s). The warehouse is not published to the host and no service reads it.
+
+**Schema** (`db/warehouse/init.sql`):
+
+| Table | Grain | From |
+|---|---|---|
+| `dim_player` | one player | Player (`players`) |
+| `dim_applicant` | one applicant, with its `scenario` | Applicant (`applicants`) |
+| `dim_credential` | one credential | Credential (`credentials`) |
+| `dim_university_record` | one applicant's record | University Record |
+| `dim_rule` | one rule | Server Rules (`rules`) |
+| `dim_date` | one day (`yyyymmdd`) | generated |
+| `fact_session` | one shift: moderator, status, result, applicants processed, score, participants | Session (`sessions`, `session_participants`) |
+| `fact_decision` | one decision: applicant, decision, expected decision, correct, penalty, violated rules | Moderation (`decisions`, `violated_rules`) |
+| `fact_chat_activity` | one channel of a shift: messages, senders, first and last message | Discord DMs (`channels`, `messages`) |
+| `etl_run` | one ETL pass: start, end, `status` (`ok`, `partial`, `failed`), per-source counts and errors | the ETL itself |
+
+Three views answer the questions the game is about: `v_accuracy_by_role` (how often moderators decide correctly, by the applicant's role), `v_accuracy_by_scenario` (by the deception scenario) and `v_moderator_leaderboard` (decisions, accuracy and total penalty per moderator).
+
+**The ETL.**
+
+- **Extract.** Every pass reads the full current state of each of the eight service databases, read-only, as `etl_reader`: PostgreSQL through `pg-router`'s replica ports (`55xx`) with `default_transaction_read_only`, MongoDB with `readPreference=secondaryPreferred`. It never touches a primary, so the analytics load never slows the game down.
+- **Transform** into the dimensions and facts above (one row per natural key, dates to `dim_date`).
+- **Load.** One transaction per source: upsert on the natural key, then delete the rows the source no longer has (a compensated saga, a deleted decision). A pass can therefore be repeated at any time without duplicates.
+- **Failures.** A source that fails is logged, deletes nothing and does not stop the others, and the pass is recorded as `partial`. A source that is not configured is skipped. A source that answers but is empty (a Mongo replica still in its initial sync) empties its tables for that pass; the next pass refills them.
+- **Logs**: `etl run started` and `etl run finished` around each pass, and per source `etl source loaded` (`source`, `extracted`, `loaded`, `deleted`, `durationMs`), `etl source failed` with the error, or `etl source skipped`.
+
+**Ground truth stays here.** `dim_applicant.scenario` and `fact_decision.expected_decision` are what the game hides from the players. Nothing player-facing reads the warehouse, and no service answer carries them.
+
+**Running it.**
+
+```bash
+docker compose exec -T etl python etl.py --once
+bash scripts/lab5-grade4-etl.sh
+```
+
+The first runs one pass now (the scheduled passes keep running). The demo script runs one pass with every source's counts, then shows the `etl_run` row, the row counts per table and the three views.
+
+**The one exception to database-per-service.** The ETL is the only component that connects to the services' databases directly. It is read-only, uses its own role with `SELECT` rights only, reads only replicas, and writes nowhere but the warehouse, so no service's data or availability depends on it.
 
 ## Logging Convention
 
@@ -1244,24 +1440,38 @@ Each service is pushed to Docker Hub as a versioned, public image — no Dockerf
 
 | Service | Docker Hub Image | Port | Run Requirements |
 |---|---|---|---|
-| Gateway | [`mihaela5/gateway:4.0.0`](https://hub.docker.com/r/mihaela5/gateway) | 3000 | none required; optionally `PORT` (`3000` by default), `LOG_LEVEL` (`INFO`), `MESSAGE_BROKER_URL` (Lab 4; set, every request goes to the Message Broker at `<url>/<prefix>` with the service token, and the Broker picks the instance and runs the circuit breaker; unset, every service is reached at its fixed URL below, without balancing or a breaker), `SERVICE_DISCOVERY_URL`, `SD_HEARTBEAT_MS` (`10000`) and `ADVERTISE_URL` (Lab 3: the Gateway registers itself; it no longer reads the instance list), `PLAYER_SERVICE_URL`, `SESSION_SERVICE_URL`, `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL`, `MODERATION_SERVICE_URL`, `DISCORD_DMS_SERVICE_URL` (fixed URLs, used only without `MESSAGE_BROKER_URL`), `UPSTREAM_TIMEOUT_MS` (`10000` by default, sent to the Broker as `X-Timeout-Ms`), `MAX_CONCURRENT_TASKS` (`500` by default; Lab 2, grade 8: beyond it `503 CONCURRENCY_LIMIT_REACHED` with `Retry-After: 1`), `JWT_SECRET` and `SERVICE_TOKEN` (Lab 2, grade 10: both required in compose, so authorization is on; `SERVICE_TOKEN` also authenticates the Gateway to the Broker), `WS_TICKET_SECRET` and `DISCORD_DMS_WS_PUBLIC_URL` (WebSocket negotiation; without the secret `POST /ws/negotiate` answers `503 WS_NEGOTIATION_DISABLED`). Lab 4, grade 8: routes only services call are not exposed (`404 ROUTE_NOT_FOUND`, see the Gateway notes). Lab 4, grade 4: `LOKI_URL` (`http://loki:3100`) for `GET /logs/download`, service token only (see Log Collection). No database |
-| Player Service | [`mihaela5/player-service:4.0.0`](https://hub.docker.com/r/mihaela5/player-service) | 3001, not published — reached through the Gateway at `/player` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `JWT_SECRET` (signs the login token, at least 32 characters; the service does not start without it); optionally `JWT_TTL_SECONDS` (`86400`), `TASK_TIMEOUT_MS` (`2000`) and `MAX_CONCURRENT_TASKS` (`50`) (Lab 2, grade 8), `LOAD_CRITICAL_PERCENT` (`80` by default; Lab 3, grade 8: `/status` reports `load.critical` from that share of `MAX_CONCURRENT_TASKS` in flight), and `REQUIRE_CALLER_HEADERS` (`false` by default, `true` in compose; Lab 2, grade 10: `true` answers `401 UNAUTHORIZED` on a protected route called without the Gateway's caller headers; set only together with the Gateway's authorization); `LOG_LEVEL` (`INFO`); `SERVICE_DISCOVERY_URL`, `SERVICE_TOKEN`, `SD_HEARTBEAT_MS` (`10000`) and `ADVERTISE_URL` (Lab 3: with the URL set, each instance registers on startup, sends heartbeats and deregisters on shutdown; unset, it does not register); `GRPC_PORT` (Lab 4: `50001` in compose; serves `events.v1.EventSink/Deliver`, registered as `grpcUrl`) and `SD_TOPICS` (`session.ended` in compose; the topics sent with the registration, only with `GRPC_PORT`) |
-| Server Moderation Session Service | [`mihaela5/session-service:4.0.0`](https://hub.docker.com/r/mihaela5/session-service) | 3002, not published — reached through the Gateway at `/session` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `BROKER_GRPC_URL` (Lab 4, grade 6: `message-broker:50011` in compose; set, the shift XP is published as one `session.ended` event on `end`) and `PUBLISH_TIMEOUT_MS` (`1500`; two attempts at most), `GRPC_DEPENDENCIES` (Lab 4, grade 8: all four dependencies in compose, called over gRPC through `BROKER_GRPC_URL`; a dependency not listed is called over REST through its `*_SERVICE_URL`; any other name stops the service at start), `GRPC_PORT` (Lab 4, grade 8: `50002` in compose; serves `GetSession` and registers it as `grpcUrl`), `PLAYER_SERVICE_URL` (shift XP is sent there on `end` while `BROKER_GRPC_URL` is unset), `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` (in compose, each points at the Message Broker, e.g. `http://message-broker:3011/applicant`) — if unset, the requests that need that dependency answer `503 DEPENDENCY_UNAVAILABLE`; `HTTP_TIMEOUT_MS` (`4500`), `TASK_TIMEOUT_MS` (`8000`) and `MAX_CONCURRENT_TASKS` (`50`) (Lab 2, grade 8, from the timeout budget); `LOAD_CRITICAL_PERCENT` (`80` by default; Lab 3, grade 8: `/status` reports `load.critical` from that share of `MAX_CONCURRENT_TASKS` in flight); `SERVICE_TOKEN` (Lab 2, grade 10: sent as `Authorization: Bearer <token>` on every outgoing call when set, never logged; empty by default; Lab 3: also authenticates the instance with Service Discovery); `LOG_LEVEL` (`INFO`); `SERVICE_DISCOVERY_URL`, `SD_HEARTBEAT_MS` (`10000`) and `ADVERTISE_URL`, as for Player Service |
-| Applicant Service | [`ciprik13/applicant-service:4.0.0`](https://hub.docker.com/r/ciprik13/applicant-service) | 3003, not published — reached through the Gateway at `/applicant` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` (Lab 5, grade 5: in compose `DB_HOSTS` + `DB_REPLICA_SET` replace `DB_HOST`/`DB_PORT` — the three members of `rs-applicant`; the URI then carries `replicaSet`, `authSource=admin`, `retryWrites=true` and `w=majority`, and the service logs the host list, never the password); optionally `STORE_DRIVER` (`mongo` by default; `memory` runs without a database, for a single instance only, since replicas would not share it), `DECEPTIVE_RATE` (share of deceptive applicants, `0.35` by default), `UNIVERSITY_RECORD_SERVICE_URL` (in compose, the Message Broker prefix `http://message-broker:3011/university-record`; if unset, the requests that need University Record answer `503 DEPENDENCY_UNAVAILABLE`), `HTTP_TIMEOUT_MS` (`2000` by default), `TASK_TIMEOUT_MS` (`3000` by default; a request still running after it gets `504 TASK_TIMEOUT`), `MAX_CONCURRENT_TASKS` (`50` by default; beyond it `503 CONCURRENCY_LIMIT_REACHED` with `Retry-After: 1`), `LOAD_CRITICAL_PERCENT` (`80` by default; Lab 3, grade 8: `/status` reports `load.critical` from that share of `MAX_CONCURRENT_TASKS` in flight), `SERVICE_TOKEN` (Lab 2, grade 10: sent as `Authorization: Bearer <token>` on every outgoing call when set, never logged; Lab 3: also authenticates the instance with Service Discovery), `ENABLE_TEST_HOOKS` (`false`; demo only, enables `?simulateDelayMs=`); `LOG_LEVEL` (`INFO`); `SERVICE_DISCOVERY_URL`, `SD_HEARTBEAT_MS` (`10000`) and `ADVERTISE_URL`, as for Player Service; `GRPC_PORT` (Lab 4, grade 8: `50003` in compose; serves `GetApplicant` and `GenerateApplicant` and registers it as `grpcUrl`; unset, REST only); `BROKER_GRPC_URL` (`message-broker:50011`: publishes `applicant.created`); `GRPC_DEPENDENCIES` (`university-record-service` in Compose; `GetRecord` goes over gRPC through the Broker). `GET /metrics` for Prometheus. Since Lab 4 no circuit breaker of its own: the Broker's |
-| Credential Service | [`ciprik13/credential-service:4.0.0`](https://hub.docker.com/r/ciprik13/credential-service) | 3004, not published — reached through the Gateway at `/credential` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` (Lab 5, grade 5: in compose `DB_HOSTS` + `DB_REPLICA_SET` replace `DB_HOST`/`DB_PORT` — the three members of `rs-credential`; the URI then carries `replicaSet`, `authSource=admin`, `retryWrites=true` and `w=majority`, and the service logs the host list, never the password), `CREDENTIAL_SIGNING_SECRET` (HMAC secret for credential authenticity, the same value on every replica — without it the service falls back to a development secret and credentials issued elsewhere are reported as `FORGED_SIGNATURE`; at start-up it logs a warning when the secret is missing, a value published in the repositories, or shorter than 32 characters); optionally `STORE_DRIVER` (`mongo` by default; `memory` runs without a database, for a single instance only), `APPLICANT_SERVICE_URL` (in compose, the Message Broker prefix `http://message-broker:3011/applicant`; if unset, the requests that need Applicant Service answer `503 DEPENDENCY_UNAVAILABLE`), `HTTP_TIMEOUT_MS` (`2000` by default), `TASK_TIMEOUT_MS` (`3000` by default; a request still running after it gets `504 TASK_TIMEOUT`), `MAX_CONCURRENT_TASKS` (`50` by default; beyond it `503 CONCURRENCY_LIMIT_REACHED` with `Retry-After: 1`), `LOAD_CRITICAL_PERCENT` (`80` by default; Lab 3, grade 8: `/status` reports `load.critical` from that share of `MAX_CONCURRENT_TASKS` in flight), `SERVICE_TOKEN` (Lab 2, grade 10: sent as `Authorization: Bearer <token>` on every outgoing call when set, never logged; Lab 3: also authenticates the instance with Service Discovery), `ENABLE_TEST_HOOKS` (`false`; demo only, enables `?simulateDelayMs=`); `LOG_LEVEL` (`INFO`); `SERVICE_DISCOVERY_URL`, `SD_HEARTBEAT_MS` (`10000`) and `ADVERTISE_URL`, as for Player Service; `GRPC_PORT` (Lab 4, grade 8: `50004` in compose; serves `IssueCredential`, `GetCredential` and `ValidateCredential` and registers it as `grpcUrl`; unset, REST only); `BROKER_GRPC_URL` (`message-broker:50011`: Applicant is called over gRPC through it; unset, REST through `APPLICANT_SERVICE_URL`). `GET /metrics` for Prometheus. Since Lab 4 no circuit breaker of its own: the Broker's |
+| Gateway | [`mihaela5/gateway:5.0.0-rc.1`](https://hub.docker.com/r/mihaela5/gateway) | 3000 | none required; optionally `PORT` (`3000` by default), `LOG_LEVEL` (`INFO`), `MESSAGE_BROKER_URL` (Lab 4; set, every request goes to the Message Broker at `<url>/<prefix>` with the service token, and the Broker picks the instance and runs the circuit breaker; unset, every service is reached at its fixed URL below, without balancing or a breaker), `SERVICE_DISCOVERY_URL`, `SD_HEARTBEAT_MS` (`10000`) and `ADVERTISE_URL` (Lab 3: the Gateway registers itself; it no longer reads the instance list), `PLAYER_SERVICE_URL`, `SESSION_SERVICE_URL`, `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL`, `MODERATION_SERVICE_URL`, `DISCORD_DMS_SERVICE_URL` (fixed URLs, used only without `MESSAGE_BROKER_URL`), `UPSTREAM_TIMEOUT_MS` (`10000` by default, sent to the Broker as `X-Timeout-Ms`), `MAX_CONCURRENT_TASKS` (`500` by default; Lab 2, grade 8: beyond it `503 CONCURRENCY_LIMIT_REACHED` with `Retry-After: 1`), `JWT_SECRET` and `SERVICE_TOKEN` (Lab 2, grade 10: both required in compose, so authorization is on; `SERVICE_TOKEN` also authenticates the Gateway to the Broker), `WS_TICKET_SECRET` and `DISCORD_DMS_WS_PUBLIC_URL` (WebSocket negotiation; without the secret `POST /ws/negotiate` answers `503 WS_NEGOTIATION_DISABLED`). Lab 4, grade 8: routes only services call are not exposed (`404 ROUTE_NOT_FOUND`, see the Gateway notes). Lab 4, grade 4: `LOKI_URL` (`http://loki:3100`) for `GET /logs/download`, service token only (see Log Collection). Lab 5, grades 6 and 7 (see Caching): `CACHE_NODES` (`cache-1:6379,cache-2:6379,cache-3:6379` in compose; unset, no cache and every answer is a `BYPASS`), `CACHE_ENABLED` (`true`), `CACHE_VNODES` (`160`), `CACHE_TIMEOUT_MS` (`50`), `CACHE_NODE_FAILURES_TO_EJECT` (`3`), `CACHE_NODE_RETRY_S` (`10`), `CACHE_MAX_CONNECTIONS` (`64`), `AUTH_CACHE_TTL_S` (`60`) and `AUTH_LOOKUP_TIMEOUT_MS` (`2000`, the player lookup behind the auth cache). No database |
+| Player Service | [`mihaela5/player-service:4.0.0`](https://hub.docker.com/r/mihaela5/player-service) | 3001, not published — reached through the Gateway at `/player` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `JWT_SECRET` (signs the login token, at least 32 characters; the service does not start without it); optionally `JWT_TTL_SECONDS` (`86400`), `TASK_TIMEOUT_MS` (`2000`) and `MAX_CONCURRENT_TASKS` (`50`) (Lab 2, grade 8), `LOAD_CRITICAL_PERCENT` (`80` by default; Lab 3, grade 8: `/status` reports `load.critical` from that share of `MAX_CONCURRENT_TASKS` in flight), and `REQUIRE_CALLER_HEADERS` (`false` by default, `true` in compose; Lab 2, grade 10: `true` answers `401 UNAUTHORIZED` on a protected route called without the Gateway's caller headers; set only together with the Gateway's authorization); `LOG_LEVEL` (`INFO`); `SERVICE_DISCOVERY_URL`, `SERVICE_TOKEN`, `SD_HEARTBEAT_MS` (`10000`) and `ADVERTISE_URL` (Lab 3: with the URL set, each instance registers on startup, sends heartbeats and deregisters on shutdown; unset, it does not register); `GRPC_PORT` (Lab 4: `50001` in compose; serves `events.v1.EventSink/Deliver`, registered as `grpcUrl`) and `SD_TOPICS` (`session.ended` in compose; the topics sent with the registration, only with `GRPC_PORT`). Lab 5, grade 5: in compose `DB_HOST` is `pg-router` and `DB_PORT` `5401`, the leader of `player-db` |
+| Server Moderation Session Service | [`mihaela5/session-service:5.0.0-rc.1`](https://hub.docker.com/r/mihaela5/session-service) | 3002, not published — reached through the Gateway at `/session` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `BROKER_GRPC_URL` (Lab 4, grade 6: `message-broker:50011` in compose; set, the shift XP is published as one `session.ended` event on `end`) and `PUBLISH_TIMEOUT_MS` (`1500`; two attempts at most), `GRPC_DEPENDENCIES` (Lab 4, grade 8: all four dependencies in compose, called over gRPC through `BROKER_GRPC_URL`; a dependency not listed is called over REST through its `*_SERVICE_URL`; any other name stops the service at start), `GRPC_PORT` (Lab 4, grade 8: `50002` in compose; serves `GetSession` and registers it as `grpcUrl`), `PLAYER_SERVICE_URL` (shift XP is sent there on `end` while `BROKER_GRPC_URL` is unset), `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` (in compose, each points at the Message Broker, e.g. `http://message-broker:3011/applicant`) — if unset, the requests that need that dependency answer `503 DEPENDENCY_UNAVAILABLE`; `HTTP_TIMEOUT_MS` (`4500`), `TASK_TIMEOUT_MS` (`8000`) and `MAX_CONCURRENT_TASKS` (`50`) (Lab 2, grade 8, from the timeout budget); `LOAD_CRITICAL_PERCENT` (`80` by default; Lab 3, grade 8: `/status` reports `load.critical` from that share of `MAX_CONCURRENT_TASKS` in flight); `SERVICE_TOKEN` (Lab 2, grade 10: sent as `Authorization: Bearer <token>` on every outgoing call when set, never logged; empty by default; Lab 3: also authenticates the instance with Service Discovery); `LOG_LEVEL` (`INFO`); `SERVICE_DISCOVERY_URL`, `SD_HEARTBEAT_MS` (`10000`) and `ADVERTISE_URL`, as for Player Service. Lab 5, grade 8: serves `tx.v1.Participant` on `GRPC_PORT` (`session.apply_decision`, see Transactions), with `TX_LOCK_TIMEOUT_MS` (`1500`; a `Prepare` waiting longer for the session row votes NO), `TX_SWEEP_INTERVAL_MS` (`30000`) and `TX_ORPHAN_AFTER_MS` (`60000`) for the recovery sweep; the database needs `max_prepared_transactions` above 0. Lab 5, grade 5: in compose `DB_HOST` is `pg-router` and `DB_PORT` `5402` |
+| Applicant Service | [`ciprik13/applicant-service:5.0.0`](https://hub.docker.com/r/ciprik13/applicant-service) | 3003, not published — reached through the Gateway at `/applicant` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` (Lab 5, grade 5: in compose `DB_HOSTS` + `DB_REPLICA_SET` replace `DB_HOST`/`DB_PORT` — the three members of `rs-applicant`; the URI then carries `replicaSet`, `authSource=admin`, `retryWrites=true` and `w=majority`, and the service logs the host list, never the password); optionally `STORE_DRIVER` (`mongo` by default; `memory` runs without a database, for a single instance only, since replicas would not share it), `DECEPTIVE_RATE` (share of deceptive applicants, `0.35` by default), `UNIVERSITY_RECORD_SERVICE_URL` (in compose, the Message Broker prefix `http://message-broker:3011/university-record`; if unset, the requests that need University Record answer `503 DEPENDENCY_UNAVAILABLE`), `HTTP_TIMEOUT_MS` (`2000` by default), `TASK_TIMEOUT_MS` (`3000` by default; a request still running after it gets `504 TASK_TIMEOUT`), `MAX_CONCURRENT_TASKS` (`50` by default; beyond it `503 CONCURRENCY_LIMIT_REACHED` with `Retry-After: 1`), `LOAD_CRITICAL_PERCENT` (`80` by default; Lab 3, grade 8: `/status` reports `load.critical` from that share of `MAX_CONCURRENT_TASKS` in flight), `SERVICE_TOKEN` (Lab 2, grade 10: sent as `Authorization: Bearer <token>` on every outgoing call when set, never logged; Lab 3: also authenticates the instance with Service Discovery), `ENABLE_TEST_HOOKS` (`false`; demo only, enables `?simulateDelayMs=` and, since Lab 5, the saga's `simulateFailAt`); `LOG_LEVEL` (`INFO`); `SERVICE_DISCOVERY_URL`, `SD_HEARTBEAT_MS` (`10000`) and `ADVERTISE_URL`, as for Player Service; `GRPC_PORT` (Lab 4, grade 8: `50003` in compose; serves `GetApplicant` and `GenerateApplicant` and registers it as `grpcUrl`; unset, REST only); `BROKER_GRPC_URL` (`message-broker:50011`: publishes `applicant.created`); `GRPC_DEPENDENCIES` (`university-record-service` in Compose; `GetRecord` goes over gRPC through the Broker). `GET /metrics` for Prometheus. Since Lab 4 no circuit breaker of its own: the Broker's |
+| Credential Service | [`ciprik13/credential-service:5.0.0`](https://hub.docker.com/r/ciprik13/credential-service) | 3004, not published — reached through the Gateway at `/credential` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` (Lab 5, grade 5: in compose `DB_HOSTS` + `DB_REPLICA_SET` replace `DB_HOST`/`DB_PORT` — the three members of `rs-credential`; the URI then carries `replicaSet`, `authSource=admin`, `retryWrites=true` and `w=majority`, and the service logs the host list, never the password), `CREDENTIAL_SIGNING_SECRET` (HMAC secret for credential authenticity, the same value on every replica — without it the service falls back to a development secret and credentials issued elsewhere are reported as `FORGED_SIGNATURE`; at start-up it logs a warning when the secret is missing, a value published in the repositories, or shorter than 32 characters); optionally `STORE_DRIVER` (`mongo` by default; `memory` runs without a database, for a single instance only), `APPLICANT_SERVICE_URL` (in compose, the Message Broker prefix `http://message-broker:3011/applicant`; if unset, the requests that need Applicant Service answer `503 DEPENDENCY_UNAVAILABLE`), `HTTP_TIMEOUT_MS` (`2000` by default), `TASK_TIMEOUT_MS` (`3000` by default; a request still running after it gets `504 TASK_TIMEOUT`), `MAX_CONCURRENT_TASKS` (`50` by default; beyond it `503 CONCURRENCY_LIMIT_REACHED` with `Retry-After: 1`), `LOAD_CRITICAL_PERCENT` (`80` by default; Lab 3, grade 8: `/status` reports `load.critical` from that share of `MAX_CONCURRENT_TASKS` in flight), `SERVICE_TOKEN` (Lab 2, grade 10: sent as `Authorization: Bearer <token>` on every outgoing call when set, never logged; Lab 3: also authenticates the instance with Service Discovery), `ENABLE_TEST_HOOKS` (`false`; demo only, enables `?simulateDelayMs=` and, since Lab 5, the saga's `simulateFailAt`); `LOG_LEVEL` (`INFO`); `SERVICE_DISCOVERY_URL`, `SD_HEARTBEAT_MS` (`10000`) and `ADVERTISE_URL`, as for Player Service; `GRPC_PORT` (Lab 4, grade 8: `50004` in compose; serves `IssueCredential`, `GetCredential` and `ValidateCredential` and registers it as `grpcUrl`; unset, REST only); `BROKER_GRPC_URL` (`message-broker:50011`: Applicant is called over gRPC through it; unset, REST through `APPLICANT_SERVICE_URL`). `GET /metrics` for Prometheus. Since Lab 4 no circuit breaker of its own: the Broker's |
 | Server Rules Service | [`ion190/server-rules-service:5.0.0-rc.2`](https://hub.docker.com/r/ion190/server-rules-service) | 3005, not published — reached through the Gateway at `/server-rules` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; Lab 5, grade 5: alternatively configure `DB_HOSTS` (comma-separated MongoDB members) and `DB_REPLICA_SET` (`rs-rules` in Compose); these replace `DB_HOST`/`DB_PORT` and enable replica-set discovery, `authSource=admin`, `retryWrites=true` and `w=majority`; `SERVICE_TOKEN` (required in Compose); `TASK_TIMEOUT_MS` (`3000`), `MAX_CONCURRENT_TASKS` (`50`), `BROKER_GRPC_URL` (`message-broker:50011` in Compose; calls University Record over gRPC through the Message Broker), `HTTP_TIMEOUT_MS` (`2500`, configured by `RULES_HTTP_TIMEOUT_MS`), `BREAKER_MODE` (shared setting, `log` by default or `remove`), `LOAD_CRITICAL_PERCENT` (`80`, configured by `RULES_LOAD_CRITICAL_PERCENT`), `SERVICE_DISCOVERY_URL` (Compose uses `http://service-discovery:3010`), and `SD_HEARTBEAT_MS` (`10000` by default); `GRPC_PORT` (`50005` in Compose; serves `server_rules.v1.ServerRulesService/EvaluateRules` and registers its per-instance address as `grpcUrl`) |
 | University Record Service | [`ion190/university-record-service:4.0.0`](https://hub.docker.com/r/ion190/university-record-service) | 3006, not published — reached through the Gateway at `/university-record` | `PORT`, `DB_HOST` (`pg-router`), `DB_PORT` (`5406`), `DB_USER`, `DB_PASSWORD`, `DB_NAME`; `SERVICE_TOKEN` (required in Compose); `TASK_TIMEOUT_MS` (`2000`), `MAX_CONCURRENT_TASKS` (`50`), `LOAD_CRITICAL_PERCENT` (`80`, configured by `UNIVERSITY_RECORD_LOAD_CRITICAL_PERCENT`), `SERVICE_DISCOVERY_URL` (Compose uses `http://service-discovery:3010`), and `SD_HEARTBEAT_MS` (`10000` by default); `GRPC_PORT` (`50006` in Compose; serves `university_record.v1.UniversityRecordService/GetRecord` and registers its per-instance address as `grpcUrl`) |
-| Moderation Service | [`d3adeye/moderation-service:4.0.0`](https://hub.docker.com/r/d3adeye/moderation-service) | 3007, not published — reached through the Gateway at `/moderation` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` (in compose, each points at the Message Broker, e.g. `http://message-broker:3011/applicant`) — if unset, the requests that need that dependency answer `503 DEPENDENCY_UNAVAILABLE`; `DISCORD_DMS_SERVICE_URL` (verdicts are not posted to chat when unset) and `DISCORD_DMS_CHANNEL` (`general-mod-chat`); `SERVICE_TOKEN` (Lab 2, grade 10: sent as `Authorization: Bearer <token>` on every outgoing call when set, never logged; empty by default; Lab 3: also authenticates the instance with Service Discovery); `HTTP_TIMEOUT_MS` (`4500`), `TASK_TIMEOUT_MS` (`8000`; a request still running after it gets `504 TASK_TIMEOUT`) and `MAX_CONCURRENT_TASKS` (`50`; beyond it `503 CONCURRENCY_LIMIT_REACHED` with `Retry-After: 1`) (Lab 2, grade 8, from the timeout budget); `LOAD_CRITICAL_PERCENT` (`80` by default; Lab 3, grade 8: `/status` reports `load.critical` from that share of `MAX_CONCURRENT_TASKS` in flight); `LOG_LEVEL` (`INFO`); `SERVICE_DISCOVERY_URL`, `SD_HEARTBEAT_MS` (`10000`) and `ADVERTISE_URL`, as for Player Service; `BROKER_GRPC_URL` (Lab 4, grade 6: `message-broker:50011` in compose; set, `decision.recorded` is published to the Broker and `announcedInChat` reports whether a subscriber received it; unset, the verdict is posted into chat over REST as in Lab 3) and `GRPC_DEPENDENCIES` (Lab 4, grade 8: `applicant-service,credential-service,server-rules-service,university-record-service` in Compose; all four dependencies are called over gRPC through the Broker) |
+| Moderation Service | [`d3adeye/moderation-service:4.0.0`](https://hub.docker.com/r/d3adeye/moderation-service) | 3007, not published — reached through the Gateway at `/moderation` | `PORT`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`; optionally `APPLICANT_SERVICE_URL`, `CREDENTIAL_SERVICE_URL`, `RULES_SERVICE_URL`, `UNIVERSITY_RECORD_SERVICE_URL` (in compose, each points at the Message Broker, e.g. `http://message-broker:3011/applicant`) — if unset, the requests that need that dependency answer `503 DEPENDENCY_UNAVAILABLE`; `DISCORD_DMS_SERVICE_URL` (verdicts are not posted to chat when unset) and `DISCORD_DMS_CHANNEL` (`general-mod-chat`); `SERVICE_TOKEN` (Lab 2, grade 10: sent as `Authorization: Bearer <token>` on every outgoing call when set, never logged; empty by default; Lab 3: also authenticates the instance with Service Discovery); `HTTP_TIMEOUT_MS` (`4500`), `TASK_TIMEOUT_MS` (`8000`; a request still running after it gets `504 TASK_TIMEOUT`) and `MAX_CONCURRENT_TASKS` (`50`; beyond it `503 CONCURRENCY_LIMIT_REACHED` with `Retry-After: 1`) (Lab 2, grade 8, from the timeout budget); `LOAD_CRITICAL_PERCENT` (`80` by default; Lab 3, grade 8: `/status` reports `load.critical` from that share of `MAX_CONCURRENT_TASKS` in flight); `LOG_LEVEL` (`INFO`); `SERVICE_DISCOVERY_URL`, `SD_HEARTBEAT_MS` (`10000`) and `ADVERTISE_URL`, as for Player Service; `BROKER_GRPC_URL` (Lab 4, grade 6: `message-broker:50011` in compose; set, `decision.recorded` is published to the Broker and `announcedInChat` reports whether a subscriber received it; unset, the verdict is posted into chat over REST as in Lab 3) and `GRPC_DEPENDENCIES` (Lab 4, grade 8: `applicant-service,credential-service,server-rules-service,university-record-service` in Compose; all four dependencies are called over gRPC through the Broker). Lab 5, grade 5: in compose `DB_HOST` is `pg-router` and `DB_PORT` `5407` |
 | Discord DMs Service | [`d3adeye/discord-dms-service:4.0.0`](https://hub.docker.com/r/d3adeye/discord-dms-service) | 3008 WebSocket (published), 3009 REST (not published — reached through the Gateway at `/discord-dms`); 3009 is the port it registers | `WS_PORT` (`3008`, serves `/ws/...` only), `HTTP_PORT` (`3009`, serves every REST endpoint and `/status`), `MONGODB_URI`, `MONGODB_DATABASE`; optionally `WS_TICKET_SECRET` (shared with the Gateway, which signs the tickets that authorise a WebSocket connection; at least 32 characters and not the same value as `JWT_SECRET` or `SERVICE_TOKEN`, or it is ignored and the socket keeps taking a plain `?playerId=`) and `SESSION_SERVICE_URL` — when set, a session is checked against Server Moderation Session Service before its channels or roster are created, and the request answers `503 DEPENDENCY_UNAVAILABLE` when that service cannot be reached; when unset, the roster is managed through this service's own `/sessions/{id}/members` endpoints; `SERVICE_TOKEN` (Lab 2, grade 10: sent as `Authorization: Bearer <token>` on the session check when set, never logged; Lab 3: also authenticates the instance with Service Discovery); `HTTP_TIMEOUT_MS` (`8500`), `TASK_TIMEOUT_MS` (`9000`; a REST request still running after it gets `504 TASK_TIMEOUT`) and `MAX_CONCURRENT_TASKS` (`50`; beyond it `503 CONCURRENCY_LIMIT_REACHED` with `Retry-After: 1`) — none of which apply to the WebSocket, which is open for a whole shift; `LOAD_CRITICAL_PERCENT` (`80` by default) and `WS_CRITICAL_CONNECTIONS` (`500` by default; Lab 3, grade 8: `/status` reports `load.critical` from either that share of `MAX_CONCURRENT_TASKS` in flight or that many open sockets, which sit outside the task limit); `LOG_LEVEL` (`INFO`); `SERVICE_DISCOVERY_URL`, `SD_HEARTBEAT_MS` (`10000`) and `ADVERTISE_URL`, as for Player Service; `BROKER_GRPC_URL` (Lab 4, grade 8: `message-broker:50011` in compose; the shift check goes to the Broker over gRPC, which forwards it to `session.v1.SessionService/GetSession`; unset, it stays REST on `SESSION_SERVICE_URL`), `GRPC_PORT` (Lab 4, grades 6 and 8: `50009` in compose; serves `events.v1.EventSink/Deliver`, registered as `grpcUrl`) and `SD_TOPICS` (`decision.recorded` in compose; the topics sent with the registration, only with `GRPC_PORT`) |
 | Service Discovery | [`ciprik13/service-discovery:4.0.0`](https://hub.docker.com/r/ciprik13/service-discovery) | 3010, not published and not behind the Gateway — reached at `http://service-discovery:3010` inside the compose network | `SERVICE_TOKEN` (the token every instance registers with; required); optionally `PORT` (`3010`), `LOG_LEVEL` (`INFO`), `EVICT_AFTER_MS` (`60000`; an instance without a heartbeat for that long is dropped), `HEALTH_INTERVAL_MS` (`5000`), `HEALTH_TIMEOUT_MS` (`1000`), `HEALTH_FAILURES_TO_UNHEALTHY` (`3`), `HEALTH_SUCCESSES_TO_READMIT` (`3`), `REMOVED_MIN_MS` (`30000`; the minimum time an instance reported by a circuit breaker stays `removed` before 3 good polls readmit it) and `DISCORD_WEBHOOK_URL` (Lab 3, grade 9: every health alert is also posted to that Discord channel; empty means alerts are only logged; never logged itself). No database: the registry lives in memory, and instances register again after a restart because their next heartbeat gets `404`. `GET /metrics` for Prometheus (Lab 4, grade 10): the shared request series plus `sd_instances{service,state}` |
-| Message Broker | [`mihaela5/message-broker:4.0.0`](https://hub.docker.com/r/mihaela5/message-broker) | 3011, not published — reached by the Gateway and the services inside the compose network, with the service token | `SERVICE_TOKEN` (every forwarded request must carry `Authorization: Bearer <SERVICE_TOKEN>`; unset, every forwarded request is refused with `401`); optionally `PORT` (`3011`), `LOG_LEVEL` (`INFO`), `SERVICE_DISCOVERY_URL` (Lab 4; set, the Broker registers itself and routes over the healthy instances it reads every `SD_REFRESH_MS`, `2000` by default, keeping the fixed URL for a service Service Discovery does not list), `SD_HEARTBEAT_MS` (`10000`), `ADVERTISE_URL`, `BREAKER_MODE` (`log` by default, or `remove`), the same eight `*_SERVICE_URL` variables as the Gateway, `UPSTREAM_TIMEOUT_MS` (`10000`), `MAX_CONCURRENT_TASKS` (`100` in the image, `500` in compose; `GET /status` is outside the limit) and `LOAD_CRITICAL_PERCENT` (`80`), `LB_STRATEGY` (`load` by default: the least-loaded healthy instance, or `round-robin`; Lab 4, grade 10) and `REROUTE_MAX_ATTEMPTS` (`3`; a failed call is rerouted to another healthy instance when that is safe); `BROKER_GRPC_PORT` (`50011`; Lab 4: `Publish`, topic deliveries and service-to-service gRPC), `GRPC_MAX_CONCURRENT_RPCS` (`200` in the image, the same `500` as `MAX_CONCURRENT_TASKS` in compose), `DELIVERY_WORKERS` (`4`), `DELIVERY_TIMEOUT_MS` (`5000`), `MAX_DELIVERY_ATTEMPTS` (`5`; then the delivery moves to the Dead Letter Channel with reason `max_attempts`) and the fixed gRPC addresses `*_SERVICE_GRPC_URL` (`<service>:<REST port + 47000>`, for a service Service Discovery does not list); `QUEUE_STORE` (`sqlite` by default, or `memory`) and `BROKER_DB_PATH` (`/data/broker.db`; Lab 4, grade 9). One thread per request, HTTP and gRPC. Python with `grpcio`. No database server: the durable queue is one SQLite file on the named volume `broker_data` |
+| Message Broker | [`mihaela5/message-broker:5.0.0-rc.1`](https://hub.docker.com/r/mihaela5/message-broker) | 3011, not published — reached by the Gateway and the services inside the compose network, with the service token | `SERVICE_TOKEN` (every forwarded request must carry `Authorization: Bearer <SERVICE_TOKEN>`; unset, every forwarded request is refused with `401`); optionally `PORT` (`3011`), `LOG_LEVEL` (`INFO`), `SERVICE_DISCOVERY_URL` (Lab 4; set, the Broker registers itself and routes over the healthy instances it reads every `SD_REFRESH_MS`, `2000` by default, keeping the fixed URL for a service Service Discovery does not list), `SD_HEARTBEAT_MS` (`10000`), `ADVERTISE_URL`, `BREAKER_MODE` (`log` by default, or `remove`), the same eight `*_SERVICE_URL` variables as the Gateway, `UPSTREAM_TIMEOUT_MS` (`10000`), `MAX_CONCURRENT_TASKS` (`100` in the image, `500` in compose; `GET /status` is outside the limit) and `LOAD_CRITICAL_PERCENT` (`80`), `LB_STRATEGY` (`load` by default: the least-loaded healthy instance, or `round-robin`; Lab 4, grade 10) and `REROUTE_MAX_ATTEMPTS` (`3`; a failed call is rerouted to another healthy instance when that is safe); `BROKER_GRPC_PORT` (`50011`; Lab 4: `Publish`, topic deliveries and service-to-service gRPC), `GRPC_MAX_CONCURRENT_RPCS` (`200` in the image, the same `500` as `MAX_CONCURRENT_TASKS` in compose), `DELIVERY_WORKERS` (`4`), `DELIVERY_TIMEOUT_MS` (`5000`), `MAX_DELIVERY_ATTEMPTS` (`5`; then the delivery moves to the Dead Letter Channel with reason `max_attempts`) and the fixed gRPC addresses `*_SERVICE_GRPC_URL` (`<service>:<REST port + 47000>`, for a service Service Discovery does not list); `QUEUE_STORE` (`sqlite` by default, or `memory`) and `BROKER_DB_PATH` (`/data/broker.db`; Lab 4, grade 9). Lab 5, grades 8 and 9 (see Transactions): `TX_PREPARE_TIMEOUT_MS` (`2000`), `TX_COMMIT_RETRY_MS` (`1000`), `SAGA_STEP_MAX_ATTEMPTS` (`5`), `SAGA_STEP_TIMEOUT_MS` (`3000`) and `SAGA_WAIT_TIMEOUT_S` (`600`); the transaction and saga logs are kept in the same SQLite file. One thread per request, HTTP and gRPC. Python with `grpcio`. No database server: the durable queue is one SQLite file on the named volume `broker_data` |
 
 Pull an image directly, e.g.:
 ```bash
 docker pull mihaela5/player-service:4.0.0
 ```
 
-The Lab 3 images are the final `3.0.0` release, published once by CI when `dev` was merged into `main` in each repository.
+Each lab ends with a final release of every image (`3.0.0`, `4.0.0`, `5.0.0`), published once by CI when `dev` is merged into `main` in each repository. Between those, compose on `dev` may point at a release candidate (`-rc.N`).
+
+**Infrastructure images (Lab 5).** Pulled as they are; their settings are in `docker-compose.yml` and `.env`:
+
+| Container | Image | Settings |
+|---|---|---|
+| `cache-1..3` | `valkey/valkey:8.0-alpine` | `--maxmemory 64mb --maxmemory-policy allkeys-lru`, no persistence (`--save ""`, `--appendonly no`) |
+| `etcd` | `quay.io/coreos/etcd:v3.5.17` | one node, volume `etcd_data` |
+| `pg-router` | `haproxy:3.0-alpine` | `infra/pg-router/haproxy.cfg`: ports `5401`, `5402`, `5406`, `5407` (leaders) and `5501`, `5502`, `5506`, `5507` (replicas), stats on `8404` |
+| `<db>-1..3` for `player`, `session`, `university-record`, `moderation` | `ghcr.io/zalando/spilo-16:3.3-p1` | `SCOPE`, `ETCD3_HOST`, `SPILO_CONFIGURATION`; `PG_SUPERUSER_PASSWORD` and `PG_REPLICATION_PASSWORD` from `.env` |
+| `<db>-init` | `postgres:16-alpine` | `db/postgres-ha/init-app-db.sh`: the service's database and user, `etl_reader` (`ETL_READER_PASSWORD`), `init.sql` |
+| `<db>-1..3` for `applicant`, `credential`, `rules`, `discord-dms` | `mongo:7` | `db/mongo-rs/mongod-rs.sh`, keyfile from `MONGO_REPLICA_KEY` |
+| `<db>-rs-init` | `mongo:7` | `db/mongo-rs/init-replica-set.sh` |
+| `warehouse-db` | `postgres:16-alpine` | `WAREHOUSE_DB_USER`, `WAREHOUSE_DB_PASSWORD`, `WAREHOUSE_DB_NAME`; `db/warehouse/init.sql` |
+| `etl` | `python:3.12-slim` | `etl/`; `ETL_INTERVAL_S` (`60`), `ETL_LOG_LEVEL` (`INFO`), and per source `<SOURCE>_DB_*` as `etl_reader` |
 
 **Note:** these are the variables the container itself reads. If you're running the full system via the shared `docker-compose.yml` at the repo root, its `.env` file uses service-prefixed names instead (e.g. `PLAYER_DB_USER`) to avoid collisions across all 8 services sharing one file — see that file for the exact mapping.
 
@@ -1271,8 +1481,8 @@ See `docker-compose.yml` at the repo root for the full setup, including each ser
 
 **Requirements:** Docker 24+ with Docker Compose v2. No local Node.js, Go or Python is needed to run the services. Node.js 22 is only needed for running the Postman collections with newman (or import them into the Postman app instead).
 
-1. Create your environment file with `cp .env.example .env`, then replace every `replace-with-…` placeholder with a real value and generate your own `JWT_SECRET` and `SERVICE_TOKEN`, two different values (both empty in `.env.example` on purpose: `docker compose` refuses to start without them, so no machine runs with a published secret). Also replace the `change-me` of `WS_TICKET_SECRET` with a third value of at least 32 characters; while it is `change-me` the stack starts, but WebSocket negotiation stays off. `.env.example` shows how to generate strong values, and `.env` is gitignored and must never be committed.
-2. Start everything with `docker compose up -d`. Service Discovery starts first; Player, Session, Applicant and Credential run two replicas each (`<SERVICE>_REPLICAS` in `.env`), and every instance registers itself.
+1. Create your environment file with `cp .env.example .env`, then replace every `replace-with-…` placeholder with a real value (Lab 5 adds `PG_SUPERUSER_PASSWORD`, `PG_REPLICATION_PASSWORD`, `ETL_READER_PASSWORD`, `MONGO_REPLICA_KEY` and `WAREHOUSE_DB_PASSWORD`) and generate your own `JWT_SECRET` and `SERVICE_TOKEN`, two different values (both empty in `.env.example` on purpose: `docker compose` refuses to start without them, so no machine runs with a published secret). Also replace the `change-me` of `WS_TICKET_SECRET` with a third value of at least 32 characters; while it is `change-me` the stack starts, but WebSocket negotiation stays off. `.env.example` shows how to generate strong values, and `.env` is gitignored and must never be committed.
+2. Start everything with `docker compose up -d`: about 60 containers, a few of them one-shot setup jobs that exit when done. Service Discovery starts first; each of the eight services except Discord DMs runs two replicas (`<SERVICE>_REPLICAS` in `.env`), and every instance registers itself. On the first start each database cluster elects its leader and its `-init` / `-rs-init` job creates the database, so the services come up a minute or two after the databases.
 3. Check that each service is healthy through the Gateway with `curl http://localhost:3000/<prefix>/status` (e.g. `/player/status`); `curl http://localhost:3000/status` is the Gateway's own. The status routes need no token.
 4. Test a service with its Postman collection from `postman/`, e.g. `npx newman run postman/session-service.postman_collection.json`. Each collection registers and logs in a player first, because every other route needs `Authorization: Bearer <token>`.
 
@@ -1308,7 +1518,28 @@ A replica stopped with `docker stop <container>` deregisters on `SIGTERM` and le
 
 **Health alerts (Lab 3, grades 8 and 9).** Service Discovery logs a `health alert` line whenever an instance turns `unhealthy`, is `removed`, recovers, or its `load.critical` changes. To also get them in Discord, create a webhook (Discord: Server Settings → Integrations → Webhooks → New Webhook → Copy Webhook URL), put it in `.env` as `DISCORD_WEBHOOK_URL`, and run `docker compose up -d service-discovery`. The URL is a credential: keep it in `.env` only.
 
-Each database runs `db/<service>/init.*` on first startup and persists its data in a named Docker volume, so data survives `docker compose down`. Use `docker compose down -v` to wipe it.
+Each database runs `db/<service>/init.*` on first startup and persists its data in named Docker volumes (one per node since Lab 5), so data survives `docker compose down`. Use `docker compose down -v` to wipe it.
+
+**Lab 5.** The database volumes changed in Lab 5 (three per database), so run `docker compose down -v` once before the first `docker compose up -d` on a machine that ran Lab 4. Then:
+
+```bash
+docker compose exec -T player-db-1 patronictl list
+curl -s http://localhost:3000/cache/ring -H "Authorization: Bearer $SERVICE_TOKEN"
+docker compose logs -f etl
+```
+
+`patronictl list` shows the leader and the replicas of a PostgreSQL cluster (Database Replication has the MongoDB command). `/cache/ring` shows the cache nodes and how many keys each holds. The `etl` logs show a pass every minute.
+
+The Lab 5 demos, one per grade, pause before every step and print each command they run (`NONINTERACTIVE=1` runs them straight through). Each one puts back what it stopped, also when it fails:
+
+| Script | Grade | Shows |
+|---|---|---|
+| `scripts/lab5-grade4-etl.sh` | 4 | one ETL pass, the `etl_run` row, row counts per table, the three views |
+| `scripts/lab5-grade5-failover.sh` | 5 | the `player-db` leader and the `rs-applicant` primary stopped: a new one is elected, the service still answers, the old node rejoins |
+| `scripts/lab5-grade7-ring.sh` | 6, 7 | 300 cached keys over the ring; `cache-3` stopped: only its keys miss; started again: flushed and back on the ring |
+| `scripts/lab5-grade8-2pc.sh` | 8 | a committed decision (the same `txId` in the Broker, Moderation and Session logs), an aborted one, no prepared transaction left |
+| `scripts/lab5-grade9-saga.sh` | 9 | a completed saga, a compensated one (test hook), and a long-running one that survives a Broker restart |
+| `scripts/lab5-e2e.sh` | 10 | pull and start the stack, every `/status`, every Postman collection with newman, the five demos, every Prometheus target up |
 
 
 ## Monitoring
@@ -1353,6 +1584,12 @@ No series carries a service name. Prometheus adds `job` and `instance` from `mon
 `/metrics` is exempt from the concurrency limit, like `/status`. Behind the limit a scrape is answered `503` at full load, which marks the instance down in Prometheus.
 
 Each service may add series of its own. Discord DMs Service exports `service_open_sockets` and `events_received_total{topic,outcome}`; the Message Broker exports `broker_queue_depth{topic}`, `broker_queue_deliveries{state}`, `broker_dead_letters`, `broker_circuit_state{service,state}` and `broker_instances_removed`.
+
+Lab 5 adds:
+
+- **Gateway cache:** `cache_requests_total{kind,result}`, `cache_node_requests_total{node,result}`, `cache_ring_nodes{state}` and `cache_invalidations_total{resource_type}` (see Caching).
+- **Broker, two-phase commit:** `broker_tx_total{type,outcome}` and `broker_tx_in_progress`.
+- **Broker, sagas:** `broker_saga_total{type,state}`, `broker_saga_steps_total{service,action,result}` and `broker_saga_compensations_total{service}`.
 
 ## Log Collection
 
