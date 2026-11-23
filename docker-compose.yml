@@ -224,7 +224,7 @@ services:
 
   # ==================== Player Service (Mihaela) ====================
   player-service:
-    image: mihaela5/player-service:4.0.0
+    image: mihaela5/player-service:5.0.0
     restart: unless-stopped
     # Lab 3, grade 5: two instances. Each registers its own container hostname with
     # Service Discovery, so there is no fixed host port and no container_name.
