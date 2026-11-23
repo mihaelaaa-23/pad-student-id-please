@@ -1084,7 +1084,7 @@ services:
 
   # ==================== Moderation Service (Liviu) ====================
   moderation-service:
-    image: d3adeye/moderation-service:4.0.0
+    image: d3adeye/moderation-service:5.0.0-rc.1
     restart: unless-stopped
     # Lab 3, grade 5: two instances. Each registers its own container hostname with
     # Service Discovery, so there is no fixed host port and no container_name. The
@@ -1131,6 +1131,13 @@ services:
       DB_USER: ${MODERATION_DB_USER}
       DB_PASSWORD: ${MODERATION_DB_PASSWORD}
       DB_NAME: ${MODERATION_DB_NAME}
+      # Lab 5, grade 8: a decision is a two-phase commit moderation.decision, run by the
+      # Broker's coordinator, with Session applying it to the score. This service serves
+      # tx.v1.Participant on GRPC_PORT (registered as grpcUrl) and gives the coordinator
+      # TX_TIMEOUT_MS, under TASK_TIMEOUT_MS. TX_MODE=local is the Lab 4 behaviour.
+      GRPC_PORT: 50007
+      TX_MODE: 2pc
+      TX_TIMEOUT_MS: 6000
     depends_on:
       # Not the nodes but the init job: a healthy Patroni node is not yet a database
       # with the application role, the schema and etl_reader in it.
