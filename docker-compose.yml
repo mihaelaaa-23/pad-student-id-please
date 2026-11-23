@@ -495,7 +495,7 @@ services:
     image: ghcr.io/zalando/spilo-16:3.3-p1
     restart: unless-stopped
     hostname: session-db-1
-    environment:
+    environment: &session-db-env
       SCOPE: session-db
       PGVERSION: "16"
       ETCD3_HOST: etcd:2379
@@ -504,13 +504,17 @@ services:
       PGPASSWORD_ADMIN: ${PG_ADMIN_PASSWORD:?set PG_ADMIN_PASSWORD in .env, see .env.example}
       PGPASSWORD_STANDBY: ${PG_REPLICATION_PASSWORD:?set PG_REPLICATION_PASSWORD in .env, see .env.example}
       ALLOW_NOSSL: "true"
+      # Advertised by hostname, not IP: see player-db-1 (#236).
       SPILO_CONFIGURATION: |
         bootstrap:
           dcs:
             postgresql:
               parameters:
                 max_prepared_transactions: 64
+        restapi:
+          connect_address: session-db-1:8008
         postgresql:
+          connect_address: session-db-1:5432
           parameters:
             shared_buffers: 128MB
             max_prepared_transactions: 64
@@ -529,12 +533,42 @@ services:
   session-db-2:
     <<: *session-db
     hostname: session-db-2
+    environment:
+      <<: *session-db-env
+      SPILO_CONFIGURATION: |
+        bootstrap:
+          dcs:
+            postgresql:
+              parameters:
+                max_prepared_transactions: 64
+        restapi:
+          connect_address: session-db-2:8008
+        postgresql:
+          connect_address: session-db-2:5432
+          parameters:
+            shared_buffers: 128MB
+            max_prepared_transactions: 64
     volumes:
       - session_db_2_data:/home/postgres/pgdata
 
   session-db-3:
     <<: *session-db
     hostname: session-db-3
+    environment:
+      <<: *session-db-env
+      SPILO_CONFIGURATION: |
+        bootstrap:
+          dcs:
+            postgresql:
+              parameters:
+                max_prepared_transactions: 64
+        restapi:
+          connect_address: session-db-3:8008
+        postgresql:
+          connect_address: session-db-3:5432
+          parameters:
+            shared_buffers: 128MB
+            max_prepared_transactions: 64
     volumes:
       - session_db_3_data:/home/postgres/pgdata
 
