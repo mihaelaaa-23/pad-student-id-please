@@ -962,7 +962,7 @@ services:
 
   # ==================== University Record Service (Ion) ====================
   university-record-service:
-    image: ion190/university-record-service:4.0.0
+    image: ion190/university-record-service:5.0.0
     restart: unless-stopped
     deploy:
       replicas: ${UNIVERSITY_RECORD_REPLICAS:-2}
