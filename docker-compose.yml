@@ -111,7 +111,7 @@ services:
   # published: only the Gateway and the services reach it, with the service token.
   # One thread per request; GET /status stays outside its concurrency limit.
   message-broker:
-    image: mihaela5/message-broker:4.0.0
+    image: mihaela5/message-broker:5.0.0-rc.1
     restart: unless-stopped
     environment:
       PORT: 3011
