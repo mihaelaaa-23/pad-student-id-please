@@ -1,0 +1,149 @@
+syntax = "proto3";
+
+// Distributed transactions (Lab 5, grades 8 and 9).
+//
+// Coordinator is served by the Message Broker itself (BROKER_GRPC_URL,
+// message-broker:50011); the Broker does not forward it.
+// Participant (2PC) and SagaParticipant (saga) are served by the services that
+// take part, on their own gRPC port. The Broker calls them directly: it picks a
+// healthy instance of the named service from Service Discovery by its grpcUrl,
+// as it does for topic deliveries.
+//
+// payload, context and output are JSON (UTF-8 bytes).
+package tx.v1;
+
+option go_package = "github.com/mihaelaaa-23/pad-student-id-please/proto/gen/go/tx/v1;txv1";
+
+service Coordinator {
+  // Two-phase commit. Returns once the outcome is stored in the coordinator's
+  // log; Commit/Abort reach the participants afterwards, retried until acked.
+  rpc RunTransaction(RunTransactionRequest) returns (RunTransactionResponse);
+  // For a participant recovering a prepared transaction. OUTCOME_UNSPECIFIED
+  // means not decided yet: keep it prepared and ask again later.
+  rpc GetDecision(GetDecisionRequest) returns (GetDecisionResponse);
+  // Starts a saga and returns at once (state "running"), or after up to
+  // wait_ms when it finishes sooner.
+  rpc StartSaga(StartSagaRequest) returns (SagaState);
+  // NOT_FOUND (x-error-code SAGA_NOT_FOUND) for an unknown saga_id.
+  rpc GetSaga(GetSagaRequest) returns (SagaState);
+}
+
+service Participant {
+  // BEGIN, the writes, INSERT into applied_tx, PREPARE TRANSACTION
+  // 'tx-<tx_id>-<service>', then yes: true. A business refusal is
+  // yes: false with reason "<CODE>: <message>", not a gRPC error.
+  rpc Prepare(PrepareRequest) returns (PrepareResponse);
+  // COMMIT PREPARED; a gid already gone with tx_id in applied_tx is ok: true.
+  rpc Commit(TxRef) returns (TxAck);
+  // ROLLBACK PREPARED; a gid already gone is ok: true.
+  rpc Abort(TxRef) returns (TxAck);
+}
+
+service SagaParticipant {
+  // Idempotent by (saga_id, step): running it again returns the same output.
+  // A business refusal is FAILED_PRECONDITION, INVALID_ARGUMENT, NOT_FOUND or
+  // ALREADY_EXISTS (the saga compensates); UNAVAILABLE, DEADLINE_EXCEEDED,
+  // RESOURCE_EXHAUSTED and INTERNAL are retried.
+  rpc Execute(SagaStepRequest) returns (SagaStepResponse);
+  // Idempotent: compensating a step already compensated, or never executed,
+  // succeeds.
+  rpc Compensate(SagaStepRequest) returns (SagaStepResponse);
+}
+
+enum Outcome {
+  OUTCOME_UNSPECIFIED = 0;
+  COMMITTED = 1;
+  ABORTED = 2;
+}
+
+message TxBranch {
+  string service = 1;
+  string action = 2;
+  bytes payload = 3;
+}
+
+message RunTransactionRequest {
+  string type = 1;
+  repeated TxBranch branches = 2;
+}
+
+message Vote {
+  string service = 1;
+  bool yes = 2;
+  string reason = 3;
+}
+
+message RunTransactionResponse {
+  string tx_id = 1;
+  Outcome outcome = 2;
+  repeated Vote votes = 3;
+}
+
+message PrepareRequest {
+  string tx_id = 1;
+  string action = 2;
+  bytes payload = 3;
+}
+
+message PrepareResponse {
+  bool yes = 1;
+  string reason = 2;
+}
+
+message TxRef {
+  string tx_id = 1;
+  string action = 2;
+}
+
+message TxAck {
+  bool ok = 1;
+}
+
+message GetDecisionRequest {
+  string tx_id = 1;
+}
+
+message GetDecisionResponse {
+  string tx_id = 1;
+  Outcome outcome = 2;
+}
+
+message StartSagaRequest {
+  string type = 1;
+  bytes payload = 2;
+  int32 wait_ms = 3;
+}
+
+message GetSagaRequest {
+  string saga_id = 1;
+}
+
+message SagaStep {
+  int32 index = 1;
+  string service = 2;
+  string action = 3;
+  // pending, running, done, failed, compensated
+  string state = 4;
+  int32 attempts = 5;
+  string last_error = 6;
+}
+
+message SagaState {
+  string saga_id = 1;
+  string type = 2;
+  // running, compensating, completed, compensated, failed
+  string state = 3;
+  repeated SagaStep steps = 4;
+  bytes context = 5;
+}
+
+message SagaStepRequest {
+  string saga_id = 1;
+  int32 step = 2;
+  string action = 3;
+  bytes context = 4;
+}
+
+message SagaStepResponse {
+  bytes output = 1;
+}

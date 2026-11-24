@@ -1,0 +1,950 @@
+{
+  "info": {
+    "_postman_id": "5b1e7c2a-4f3d-4a8e-9c61-0d2f7e3a9b14",
+    "name": "Transactions - Two-Phase Commit and Saga",
+    "description": "Lab 5, grades 8 and 9, through the Gateway (CPR README, Transactions).\n\n**Two-phase commit `moderation.decision`.** A decision changes Moderation's database and Session's score, both or neither. The collection registers a player, opens a shift, processes an applicant and decides on it: `201` with a `transactionId`, and the shift's score moves by the decision's `scoreDelta` (`+10` correct, `-penalty` wrong). Then it ends the shift and decides again: Session votes NO, the answer is `409 TX_ABORTED` with every vote in `details`, and neither database changed.\n\n**Saga `applicant.intake`.** Applicant then Credential, coordinated by the Broker. `POST /applicant/applicants/intake` and the saga runs to `completed`: the applicant and the credential both exist. With `simulateFailAt: \"credential-service\"` the credential step fails and the saga compensates: the applicant created by the first step is deleted.\n\nRun headless:\n\n```\nnpx newman run postman/transactions.postman_collection.json --env-var serviceToken=$SERVICE_TOKEN\n```\n\nThe compensation folder needs Credential with `ENABLE_TEST_HOOKS=true` and is skipped unless the run adds `--env-var testHooks=true`; on a default stack the hook is off and the saga would complete instead.\n\nSession's score is moved by the coordinator's second phase, which runs just after the decision is answered, so the score is read with `Cache-Control: no-cache` and re-read for a few seconds until the change lands. The saga is polled the same way until it ends.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "gatewayUrl",
+      "value": "http://localhost:3000"
+    },
+    {
+      "key": "serviceToken",
+      "value": ""
+    },
+    {
+      "key": "testHooks",
+      "value": ""
+    },
+    {
+      "key": "username",
+      "value": ""
+    },
+    {
+      "key": "playerId",
+      "value": ""
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "sessionId",
+      "value": ""
+    },
+    {
+      "key": "scoreBefore",
+      "value": ""
+    },
+    {
+      "key": "applicantA",
+      "value": ""
+    },
+    {
+      "key": "applicantB",
+      "value": ""
+    },
+    {
+      "key": "transactionId",
+      "value": ""
+    },
+    {
+      "key": "decisionId",
+      "value": ""
+    },
+    {
+      "key": "expectedDelta",
+      "value": ""
+    },
+    {
+      "key": "scoreAfter",
+      "value": ""
+    },
+    {
+      "key": "sagaId",
+      "value": ""
+    },
+    {
+      "key": "sagaApplicantId",
+      "value": ""
+    },
+    {
+      "key": "pollTries",
+      "value": "0"
+    }
+  ],
+  "item": [
+    {
+      "name": "Register Test Player",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{gatewayUrl}}/player/players/register",
+          "host": ["{{gatewayUrl}}"],
+          "path": ["player", "players", "register"]
+        },
+        "description": "A throwaway moderator for this run. Register and login are public.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"username\": \"{{username}}\",\n    \"email\": \"{{username}}@test.com\",\n    \"password\": \"pw123\"\n}"
+        },
+        "auth": {
+          "type": "noauth"
+        }
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": ["pm.collectionVariables.set('username', 'tx_pm_' + Date.now());"]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('the player is registered', function () { pm.response.to.have.status(201); });",
+              "pm.collectionVariables.set('playerId', pm.response.json().playerId);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Login Test Player",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{gatewayUrl}}/player/players/login",
+          "host": ["{{gatewayUrl}}"],
+          "path": ["player", "players", "login"]
+        },
+        "description": "",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n    \"username\": \"{{username}}\",\n    \"password\": \"pw123\"\n}"
+        },
+        "auth": {
+          "type": "noauth"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('the player is logged in', function () { pm.response.to.have.status(200); });",
+              "pm.collectionVariables.set('token', pm.response.json().token);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Two-phase commit - committed",
+      "description": "A decision on an active shift: both databases change.",
+      "item": [
+        {
+          "name": "Open a shift",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/session/sessions",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["session", "sessions"]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"moderatorId\": \"{{playerId}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the shift is open', function () { pm.response.to.have.status(201); });",
+                  "pm.expect(pm.response.json().status).to.eql('active');",
+                  "pm.collectionVariables.set('sessionId', pm.response.json().sessionId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read the score before",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Cache-Control",
+                "value": "no-cache"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/session/sessions/{{sessionId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["session", "sessions", "{{sessionId}}"]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the shift is read', function () { pm.response.to.have.status(200); });",
+                  "const body = pm.response.json();",
+                  "pm.test('nothing is applied to a new shift', function () {",
+                  "    pm.expect(body.decisionsApplied).to.eql(0);",
+                  "});",
+                  "pm.collectionVariables.set('scoreBefore', body.score);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Process an applicant",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/session/sessions/{{sessionId}}/process-applicant",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["session", "sessions", "{{sessionId}}", "process-applicant"]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('an applicant is in front of the moderator', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    pm.expect(pm.response.json().currentApplicantId).to.be.a('string').and.not.empty;",
+                  "});",
+                  "pm.collectionVariables.set('applicantA', pm.response.json().currentApplicantId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Decide - committed",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/moderation/moderation/decide",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["moderation", "moderation", "decide"]
+            },
+            "description": "Moderation asks the Broker to run moderation.decision: Moderation records the decision, Session applies it to the score.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"sessionId\": \"{{sessionId}}\",\n    \"applicantId\": \"{{applicantA}}\",\n    \"decision\": \"reject\",\n    \"decidedBy\": \"{{playerId}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the decision is recorded', function () { pm.response.to.have.status(201); });",
+                  "const body = pm.response.json();",
+                  "pm.test('it names the transaction that recorded it', function () {",
+                  "    pm.expect(body.transactionId).to.match(/^[0-9a-f-]{36}$/);",
+                  "});",
+                  "pm.test('the verdict is consistent', function () {",
+                  "    pm.expect(body.correct).to.eql(body.decision === body.expectedDecision);",
+                  "});",
+                  "pm.collectionVariables.set('transactionId', body.transactionId);",
+                  "pm.collectionVariables.set('decisionId', body.decisionId);",
+                  "pm.collectionVariables.set('expectedDelta', body.correct ? 10 : -body.penalty);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read the decision right away",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/moderation/moderation/{{decisionId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["moderation", "moderation", "{{decisionId}}"]
+            },
+            "description": "Moderation commits its own branch as soon as the outcome is known, so the decision is there at once."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the committed decision is there', function () { pm.response.to.have.status(200); });",
+                  "pm.expect(pm.response.json().decisionId).to.eql(pm.collectionVariables.get('decisionId'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read the score after",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Cache-Control",
+                "value": "no-cache"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/session/sessions/{{sessionId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["session", "sessions", "{{sessionId}}"]
+            },
+            "description": "Session's change lands in the coordinator's second phase, just after the decision was answered, so this re-reads for a few seconds until it does."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const tries = Number(pm.collectionVariables.get('pollTries') || 0);",
+                  "if (!(body.decisionsApplied === 1) && tries < 20) {",
+                  "    pm.collectionVariables.set('pollTries', tries + 1);",
+                  "    setTimeout(function () {}, 250);",
+                  "    postman.setNextRequest(pm.info.requestName);",
+                  "    return;",
+                  "}",
+                  "pm.collectionVariables.set('pollTries', 0);",
+                  "pm.test('Session applied the decision once', function () {",
+                  "    pm.expect(body.decisionsApplied).to.eql(1);",
+                  "});",
+                  "pm.test('the score moved by the decision', function () {",
+                  "    const expected = Number(pm.collectionVariables.get('scoreBefore')) + Number(pm.collectionVariables.get('expectedDelta'));",
+                  "    pm.expect(body.score).to.eql(expected);",
+                  "});",
+                  "pm.collectionVariables.set('scoreAfter', body.score);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Two-phase commit - aborted",
+      "description": "A decision on a shift that has ended: Session votes NO, so neither database changes.",
+      "item": [
+        {
+          "name": "Process another applicant",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/session/sessions/{{sessionId}}/process-applicant",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["session", "sessions", "{{sessionId}}", "process-applicant"]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('a second applicant is in front of the moderator', function () { pm.response.to.have.status(200); });",
+                  "pm.collectionVariables.set('applicantB', pm.response.json().currentApplicantId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "End the shift",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/session/sessions/{{sessionId}}/end",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["session", "sessions", "{{sessionId}}", "end"]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('the shift is over', function () { pm.response.to.have.status(200); });"]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Decide - aborted",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/moderation/moderation/decide",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["moderation", "moderation", "decide"]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"sessionId\": \"{{sessionId}}\",\n    \"applicantId\": \"{{applicantB}}\",\n    \"decision\": \"accept\",\n    \"decidedBy\": \"{{playerId}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the transaction is aborted', function () { pm.response.to.have.status(409); });",
+                  "const error = pm.response.json().error;",
+                  "pm.test('with the contract code', function () { pm.expect(error.code).to.eql('TX_ABORTED'); });",
+                  "pm.test('every vote is in details, Session voting no', function () {",
+                  "    const votes = Object.fromEntries(error.details.map(function (v) { return [v.service, v]; }));",
+                  "    pm.expect(votes).to.have.all.keys('moderation-service', 'session-service');",
+                  "    pm.expect(votes['session-service'].yes).to.eql(false);",
+                  "    pm.expect(votes['session-service'].reason).to.match(/^CONFLICT: /);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "The aborted decision left no row",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/moderation/sessions/{{sessionId}}/decisions",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["moderation", "sessions", "{{sessionId}}", "decisions"]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the shift still has one decision', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.count).to.eql(1);",
+                  "    pm.expect(body.decisions[0].applicantId).to.eql(pm.collectionVariables.get('applicantA'));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "The aborted decision left the score alone",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Cache-Control",
+                "value": "no-cache"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/session/sessions/{{sessionId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["session", "sessions", "{{sessionId}}"]
+            },
+            "description": ""
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Session still applied only the first decision', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    const body = pm.response.json();",
+                  "    pm.expect(body.decisionsApplied).to.eql(1);",
+                  "    pm.expect(body.score).to.eql(Number(pm.collectionVariables.get('scoreAfter')));",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Saga - completed",
+      "description": "Applicant intake: Applicant creates the applicant, then Credential issues its credential.",
+      "item": [
+        {
+          "name": "Start an intake",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/applicant/applicants/intake",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["applicant", "applicants", "intake"]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"seed\": {{$randomInt}}\n}"
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{serviceToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the saga is started', function () { pm.expect(pm.response.code).to.be.oneOf([200, 202]); });",
+                  "const body = pm.response.json();",
+                  "pm.test('it has an id and a state', function () {",
+                  "    pm.expect(body.sagaId).to.be.a('string').and.not.empty;",
+                  "    pm.expect(['running', 'completed']).to.include(body.state);",
+                  "});",
+                  "pm.collectionVariables.set('sagaId', body.sagaId);",
+                  "pm.collectionVariables.set('sagaApplicantId', body.applicantId || '');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Wait for the saga to complete",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/applicant/applicants/intake/{{sagaId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["applicant", "applicants", "intake", "{{sagaId}}"]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{serviceToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const tries = Number(pm.collectionVariables.get('pollTries') || 0);",
+                  "if (!(['completed', 'compensated', 'failed'].includes(body.state)) && tries < 40) {",
+                  "    pm.collectionVariables.set('pollTries', tries + 1);",
+                  "    setTimeout(function () {}, 250);",
+                  "    postman.setNextRequest(pm.info.requestName);",
+                  "    return;",
+                  "}",
+                  "pm.collectionVariables.set('pollTries', 0);",
+                  "pm.test('the saga completed', function () { pm.expect(body.state).to.eql('completed'); });",
+                  "pm.test('both steps are done', function () {",
+                  "    pm.expect(body.steps.map(function (s) { return s.state; })).to.eql(['done', 'done']);",
+                  "});",
+                  "if (!pm.collectionVariables.get('sagaApplicantId') && body.context) {",
+                  "    pm.collectionVariables.set('sagaApplicantId', body.context.applicantId);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "The applicant exists",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/applicant/applicants/{{sagaApplicantId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["applicant", "applicants", "{{sagaApplicantId}}"]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{serviceToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('step 1 left the applicant', function () { pm.response.to.have.status(200); });"]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Its credential exists",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/credential/credentials/{{sagaApplicantId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["credential", "credentials", "{{sagaApplicantId}}"]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{serviceToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('step 2 left the credential', function () { pm.response.to.have.status(200); });"]
+              }
+            }
+          ]
+        },
+        {
+          "name": "An unknown saga is 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/applicant/applicants/intake/00000000-0000-4000-8000-000000000000",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["applicant", "applicants", "intake", "00000000-0000-4000-8000-000000000000"]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{serviceToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('an unknown saga is not found', function () { pm.response.to.have.status(404); });",
+                  "pm.test('with the contract code', function () { pm.expect(pm.response.json().error.code).to.eql('SAGA_NOT_FOUND'); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Saga - compensated (needs testHooks=true)",
+      "description": "The credential step is made to fail, so the saga undoes step 1. Needs Credential with ENABLE_TEST_HOOKS=true and newman --env-var testHooks=true; skipped otherwise.",
+      "item": [
+        {
+          "name": "Start an intake that fails at Credential",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{gatewayUrl}}/applicant/applicants/intake",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["applicant", "applicants", "intake"]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"seed\": {{$randomInt}},\n    \"simulateFailAt\": \"credential-service\"\n}"
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{serviceToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Compensation only happens when Credential runs with ENABLE_TEST_HOOKS=true; the shared",
+                  "// stack defaults to false, where simulateFailAt is ignored and the saga completes. So this",
+                  "// folder runs only when asked: newman ... --env-var testHooks=true",
+                  "if (String(pm.environment.get('testHooks') || pm.collectionVariables.get('testHooks')) !== 'true') {",
+                  "    console.log('Skipped: saga compensation needs ENABLE_TEST_HOOKS=true and --env-var testHooks=true');",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the saga is started', function () { pm.expect(pm.response.code).to.be.oneOf([200, 202]); });",
+                  "const body = pm.response.json();",
+                  "pm.collectionVariables.set('sagaId', body.sagaId);",
+                  "pm.collectionVariables.set('sagaApplicantId', body.applicantId || '');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Wait for the saga to compensate",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/applicant/applicants/intake/{{sagaId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["applicant", "applicants", "intake", "{{sagaId}}"]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{serviceToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Compensation only happens when Credential runs with ENABLE_TEST_HOOKS=true; the shared",
+                  "// stack defaults to false, where simulateFailAt is ignored and the saga completes. So this",
+                  "// folder runs only when asked: newman ... --env-var testHooks=true",
+                  "if (String(pm.environment.get('testHooks') || pm.collectionVariables.get('testHooks')) !== 'true') {",
+                  "    console.log('Skipped: saga compensation needs ENABLE_TEST_HOOKS=true and --env-var testHooks=true');",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = pm.response.json();",
+                  "const tries = Number(pm.collectionVariables.get('pollTries') || 0);",
+                  "if (!(['completed', 'compensated', 'failed'].includes(body.state)) && tries < 40) {",
+                  "    pm.collectionVariables.set('pollTries', tries + 1);",
+                  "    setTimeout(function () {}, 250);",
+                  "    postman.setNextRequest(pm.info.requestName);",
+                  "    return;",
+                  "}",
+                  "pm.collectionVariables.set('pollTries', 0);",
+                  "pm.test('the saga compensated', function () { pm.expect(body.state).to.eql('compensated'); });",
+                  "pm.test('step 1 was undone and step 2 failed', function () {",
+                  "    pm.expect(body.steps.map(function (s) { return s.state; })).to.eql(['compensated', 'failed']);",
+                  "});",
+                  "if (!pm.collectionVariables.get('sagaApplicantId') && body.context) {",
+                  "    pm.collectionVariables.set('sagaApplicantId', body.context.applicantId);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "The applicant is gone",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{gatewayUrl}}/applicant/applicants/{{sagaApplicantId}}",
+              "host": ["{{gatewayUrl}}"],
+              "path": ["applicant", "applicants", "{{sagaApplicantId}}"]
+            },
+            "description": "",
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{serviceToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Compensation only happens when Credential runs with ENABLE_TEST_HOOKS=true; the shared",
+                  "// stack defaults to false, where simulateFailAt is ignored and the saga completes. So this",
+                  "// folder runs only when asked: newman ... --env-var testHooks=true",
+                  "if (String(pm.environment.get('testHooks') || pm.collectionVariables.get('testHooks')) !== 'true') {",
+                  "    console.log('Skipped: saga compensation needs ENABLE_TEST_HOOKS=true and --env-var testHooks=true');",
+                  "    pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('compensation deleted the applicant', function () { pm.response.to.have.status(404); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Delete Test Player",
+      "request": {
+        "method": "DELETE",
+        "header": [],
+        "url": {
+          "raw": "{{gatewayUrl}}/player/players/{{playerId}}",
+          "host": ["{{gatewayUrl}}"],
+          "path": ["player", "players", "{{playerId}}"]
+        },
+        "description": "So repeated runs don't pile players up."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": ["pm.test('the test player is removed', function () { pm.response.to.have.status(200); });"]
+          }
+        }
+      ]
+    }
+  ]
+}

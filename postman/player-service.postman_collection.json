@@ -272,6 +272,33 @@
       }
     },
     {
+      "name": "Get Nonexistent Player",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.test('nonexistent player is a 404', function () {",
+              "    pm.response.to.have.status(404);",
+              "    pm.expect(json.error.code).to.eql('NOT_FOUND');",
+              "    pm.expect(json.error.message).to.be.a('string');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{baseUrl}}/players/does-not-exist",
+          "host": [ "{{baseUrl}}" ],
+          "path": [ "players", "does-not-exist" ]
+        }
+      }
+    },
+    {
       "name": "Delete Player",
       "event": [
         {
@@ -297,7 +324,7 @@
       }
     },
     {
-      "name": "Get Nonexistent Player",
+      "name": "Deleted Player Token Is Rejected",
       "event": [
         {
           "listen": "test",
@@ -305,9 +332,9 @@
             "type": "text/javascript",
             "exec": [
               "const json = pm.response.json();",
-              "pm.test('nonexistent player is a 404', function () {",
-              "    pm.response.to.have.status(404);",
-              "    pm.expect(json.error.code).to.eql('NOT_FOUND');",
+              "pm.test('a deleted player\\'s token is rejected', function () {",
+              "    pm.response.to.have.status(401);",
+              "    pm.expect(json.error.code).to.eql('UNAUTHORIZED');",
               "    pm.expect(json.error.message).to.be.a('string');",
               "});"
             ]
@@ -317,9 +344,9 @@
       "request": {
         "method": "GET",
         "url": {
-          "raw": "{{baseUrl}}/players/does-not-exist",
+          "raw": "{{baseUrl}}/players/{{playerId}}",
           "host": [ "{{baseUrl}}" ],
-          "path": [ "players", "does-not-exist" ]
+          "path": [ "players", "{{playerId}}" ]
         }
       }
     }
