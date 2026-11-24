@@ -3,7 +3,7 @@ services:
   # The single entry point. It waits only for Service Discovery: it reads the instance
   # list from it at startup and answers 502 BAD_GATEWAY for a service until it is up.
   gateway:
-    image: mihaela5/gateway:4.0.0
+    image: mihaela5/gateway:5.0.0
     restart: unless-stopped
     ports:
       - "3000:3000"
@@ -36,6 +36,18 @@ services:
       DISCORD_DMS_WS_PUBLIC_URL: ws://localhost:3008
       # Lab 4, grade 4: GET /logs/download reads the logs of every container from Loki.
       LOKI_URL: http://loki:3100
+      # Lab 5, grades 6-7: GET-response and auth cache over cache-1..3, keys spread by
+      # the Gateway's consistent-hash ring. Fail open: an unreachable node is a MISS,
+      # so the Gateway does not depend_on the cache nodes.
+      CACHE_ENABLED: ${CACHE_ENABLED:-true}
+      CACHE_NODES: cache-1:6379,cache-2:6379,cache-3:6379
+      CACHE_VNODES: ${CACHE_VNODES:-160}
+      CACHE_TIMEOUT_MS: ${CACHE_TIMEOUT_MS:-50}
+      CACHE_NODE_FAILURES_TO_EJECT: ${CACHE_NODE_FAILURES_TO_EJECT:-3}
+      CACHE_NODE_RETRY_S: ${CACHE_NODE_RETRY_S:-10}
+      AUTH_CACHE_TTL_S: ${AUTH_CACHE_TTL_S:-60}
+      CACHE_MAX_CONNECTIONS: ${CACHE_MAX_CONNECTIONS:-64}
+      AUTH_LOOKUP_TIMEOUT_MS: ${AUTH_LOOKUP_TIMEOUT_MS:-2000}
     # service_started, not service_healthy: with no list from Service Discovery the Gateway
     # routes to the fixed upstreams above, so Service Discovery failing to start does not
     # take down the only entry point.
@@ -45,11 +57,45 @@ services:
       message-broker:
         condition: service_started
 
+  # ==================== Cache (Ciprian) ====================
+  # Lab 5, grades 6-7: three standalone Valkey nodes, sharded by the Gateway's own
+  # consistent-hash ring (not Redis Cluster). Pure cache: no persistence, LRU eviction
+  # at 64 MB, so a restarted node comes back empty and refills on misses. Not published.
+  cache-1:
+    image: valkey/valkey:8.0-alpine
+    restart: unless-stopped
+    command: ["valkey-server", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  cache-2:
+    image: valkey/valkey:8.0-alpine
+    restart: unless-stopped
+    command: ["valkey-server", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  cache-3:
+    image: valkey/valkey:8.0-alpine
+    restart: unless-stopped
+    command: ["valkey-server", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   # ==================== Service Discovery (Ciprian) ====================
   # Internal registry; no host port is published. This image defines its own
   # Docker health check on /health.
   service-discovery:
-    image: ciprik13/service-discovery:4.0.0
+    image: ciprik13/service-discovery:5.0.0
     restart: unless-stopped
     environment:
       PORT: 3010
@@ -65,7 +111,7 @@ services:
   # published: only the Gateway and the services reach it, with the service token.
   # One thread per request; GET /status stays outside its concurrency limit.
   message-broker:
-    image: mihaela5/message-broker:4.0.0
+    image: mihaela5/message-broker:5.0.0
     restart: unless-stopped
     environment:
       PORT: 3011
@@ -178,7 +224,7 @@ services:
 
   # ==================== Player Service (Mihaela) ====================
   player-service:
-    image: mihaela5/player-service:4.0.0
+    image: mihaela5/player-service:5.0.0
     restart: unless-stopped
     # Lab 3, grade 5: two instances. Each registers its own container hostname with
     # Service Discovery, so there is no fixed host port and no container_name.
@@ -188,8 +234,10 @@ services:
     # at http://localhost:3000/player.
     environment:
       PORT: 3001
-      DB_HOST: player-db
-      DB_PORT: 5432
+      # Lab 5, grade 5: player-db is a 3-node Spilo cluster; pg-router:5401 always
+      # forwards to its current leader, so the service code is unchanged.
+      DB_HOST: pg-router
+      DB_PORT: 5401
       DB_USER: ${PLAYER_DB_USER}
       DB_PASSWORD: ${PLAYER_DB_PASSWORD}
       DB_NAME: ${PLAYER_DB_NAME}
@@ -217,30 +265,168 @@ services:
       GRPC_PORT: 50001
       SD_TOPICS: session.ended
     depends_on:
-      player-db:
+      player-db-init:
+        condition: service_completed_successfully
+      pg-router:
         condition: service_healthy
       service-discovery:
         condition: service_started
 
-  player-db:
-    image: postgres:16-alpine
+  # ==================== PostgreSQL replication (Ciprian) ====================
+  # Lab 5, grade 5. One etcd holds each cluster's leader key; Patroni (inside Spilo)
+  # elects the leader through it and fails over when the leader stops renewing the key.
+  # One etcd node only coordinates failover: losing it stops failover, not the
+  # databases (a known limit, written in the README).
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.17
     restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${PLAYER_DB_USER}
-      POSTGRES_PASSWORD: ${PLAYER_DB_PASSWORD}
-      POSTGRES_DB: ${PLAYER_DB_NAME}
+    command:
+      - etcd
+      - --name=etcd
+      - --data-dir=/etcd-data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://etcd:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd:2380
+      - --initial-cluster=etcd=http://etcd:2380
+      - --initial-cluster-state=new
     volumes:
-      - player_db_data:/var/lib/postgresql/data
-      - ./db/player-service/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - etcd_data:/etcd-data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${PLAYER_DB_USER} -d ${PLAYER_DB_NAME}"]
+      test: ["CMD", "etcdctl", "--endpoints=http://localhost:2379", "endpoint", "health"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+
+  # The single address of every PostgreSQL cluster: 540x = leader (read-write),
+  # 550x = replicas (read-only, for the ETL), 8404 = stats. Routes by Patroni's REST
+  # API (GET /primary, GET /replica on 8008); see infra/pg-router/haproxy.cfg.
+  pg-router:
+    image: haproxy:3.0-alpine
+    restart: unless-stopped
+    volumes:
+      - ./infra/pg-router/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8404/ || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # player-db: three Spilo nodes (Patroni + PostgreSQL 16), one leader and two
+  # streaming replicas. The template for the other clusters: copy the three nodes and
+  # the -init job, then change SCOPE, the hostnames, both connect_address values in
+  # every node's SPILO_CONFIGURATION, the volumes, the init.sql mount, PGPORT of the
+  # -init job and the APP_DB_* values.
+  player-db-1: &player-db
+    image: ghcr.io/zalando/spilo-16:3.3-p1
+    restart: unless-stopped
+    hostname: player-db-1
+    environment: &player-db-env
+      SCOPE: player-db
+      PGVERSION: "16"
+      ETCD3_HOST: etcd:2379
+      SPILO_PROVIDER: local
+      PGPASSWORD_SUPERUSER: ${PG_SUPERUSER_PASSWORD:?set PG_SUPERUSER_PASSWORD in .env, see .env.example}
+      PGPASSWORD_ADMIN: ${PG_ADMIN_PASSWORD:?set PG_ADMIN_PASSWORD in .env, see .env.example}
+      PGPASSWORD_STANDBY: ${PG_REPLICATION_PASSWORD:?set PG_REPLICATION_PASSWORD in .env, see .env.example}
+      ALLOW_NOSSL: "true"
+      # Patroni settings on top of Spilo's defaults, per node.
+      # connect_address: every node is advertised by its compose hostname, not its IP.
+      # Spilo writes the Patroni config once per container with the container's IP, and
+      # Docker can hand out a different IP after `docker compose stop` + `up`; a stale
+      # IP in etcd then points the members at the wrong container (even a node of
+      # another cluster), replicas stop streaming and no member gets promoted. DNS
+      # always resolves the hostname to the current IP. Spilo 3.3 passes no PATRONI_*
+      # env var to Patroni and has no env var for the PostgreSQL address, so it is set
+      # here; values in SPILO_CONFIGURATION win over Spilo's generated ones.
+      # shared_buffers is pinned because Spilo sizes it from the machine's memory, and
+      # up to 12 nodes share one laptop. session-db and moderation-db also need 2PC, so
+      # their blocks add, on every node:
+      #   bootstrap: {dcs: {postgresql: {parameters: {max_prepared_transactions: 64}}}}
+      #   postgresql: {parameters: {max_prepared_transactions: 64}}
+      SPILO_CONFIGURATION: |
+        restapi:
+          connect_address: player-db-1:8008
+        postgresql:
+          connect_address: player-db-1:5432
+          parameters:
+            shared_buffers: 128MB
+    volumes:
+      - player_db_1_data:/home/postgres/pgdata
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8008/health', timeout=2)"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    depends_on:
+      etcd:
+        condition: service_healthy
+
+  player-db-2:
+    <<: *player-db
+    hostname: player-db-2
+    environment:
+      <<: *player-db-env
+      SPILO_CONFIGURATION: |
+        restapi:
+          connect_address: player-db-2:8008
+        postgresql:
+          connect_address: player-db-2:5432
+          parameters:
+            shared_buffers: 128MB
+    volumes:
+      - player_db_2_data:/home/postgres/pgdata
+
+  player-db-3:
+    <<: *player-db
+    hostname: player-db-3
+    environment:
+      <<: *player-db-env
+      SPILO_CONFIGURATION: |
+        restapi:
+          connect_address: player-db-3:8008
+        postgresql:
+          connect_address: player-db-3:5432
+          parameters:
+            shared_buffers: 128MB
+    volumes:
+      - player_db_3_data:/home/postgres/pgdata
+
+  # Spilo bootstraps PostgreSQL itself, so /docker-entrypoint-initdb.d never runs.
+  # This one-shot job creates the app role and database, runs init.sql once (only
+  # when it creates the database) and creates etl_reader, through the leader port.
+  # Idempotent: it runs on every `up` and exits 0.
+  player-db-init:
+    image: postgres:16-alpine
+    restart: "no"
+    command: ["sh", "/init-app-db.sh"]
+    environment:
+      SERVICE_NAME: player-db-init
+      PGHOST: pg-router
+      PGPORT: 5401
+      PGUSER: postgres
+      PGPASSWORD: ${PG_SUPERUSER_PASSWORD:?set PG_SUPERUSER_PASSWORD in .env, see .env.example}
+      APP_DB_USER: ${PLAYER_DB_USER}
+      APP_DB_PASSWORD: ${PLAYER_DB_PASSWORD}
+      APP_DB_NAME: ${PLAYER_DB_NAME}
+      ETL_READER_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
+    volumes:
+      - ./db/postgres-ha/init-app-db.sh:/init-app-db.sh:ro
+      - ./db/player-service/init.sql:/init-sql/init.sql:ro
+    depends_on:
+      pg-router:
+        condition: service_healthy
+      player-db-1:
+        condition: service_healthy
+      player-db-2:
+        condition: service_healthy
+      player-db-3:
+        condition: service_healthy
 
   # ==================== Server Moderation Session Service (Mihaela) ====================
   session-service:
-    image: mihaela5/session-service:4.0.0
+    image: mihaela5/session-service:5.0.0
     restart: unless-stopped
     # Lab 3, grade 5: two instances; sessions live in session-db, so any instance can
     # serve any session.
@@ -250,8 +436,10 @@ services:
     # at http://localhost:3000/session.
     environment:
       PORT: 3002
-      DB_HOST: session-db
-      DB_PORT: 5432
+      # Lab 5, grade 5: session-db is a 3-node Spilo cluster; pg-router:5402 always
+      # forwards to its current leader, so the service code is unchanged.
+      DB_HOST: pg-router
+      DB_PORT: 5402
       DB_USER: ${SESSION_DB_USER}
       DB_PASSWORD: ${SESSION_DB_PASSWORD}
       DB_NAME: ${SESSION_DB_NAME}
@@ -289,32 +477,133 @@ services:
       # (EvaluateRules) and University Record (GetRecord).
       GRPC_DEPENDENCIES: applicant-service,credential-service,server-rules-service,university-record-service
     depends_on:
-      session-db:
+      session-db-init:
+        condition: service_completed_successfully
+      pg-router:
         condition: service_healthy
       service-discovery:
         condition: service_started
       message-broker:
         condition: service_started
 
-  session-db:
-    image: postgres:16-alpine
+  # session-db: three Spilo nodes on Ciprian's player-db template (one leader, two
+  # streaming replicas). It takes part in the two-phase commit (Lab 5, grade 8), so
+  # max_prepared_transactions is set in the DCS, the cluster-wide config every node and
+  # every future leader reads, and locally for the first bootstrap. Prepared
+  # transactions are WAL-logged and replicated, so a failover keeps them.
+  session-db-1: &session-db
+    image: ghcr.io/zalando/spilo-16:3.3-p1
     restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${SESSION_DB_USER}
-      POSTGRES_PASSWORD: ${SESSION_DB_PASSWORD}
-      POSTGRES_DB: ${SESSION_DB_NAME}
+    hostname: session-db-1
+    environment: &session-db-env
+      SCOPE: session-db
+      PGVERSION: "16"
+      ETCD3_HOST: etcd:2379
+      SPILO_PROVIDER: local
+      PGPASSWORD_SUPERUSER: ${PG_SUPERUSER_PASSWORD:?set PG_SUPERUSER_PASSWORD in .env, see .env.example}
+      PGPASSWORD_ADMIN: ${PG_ADMIN_PASSWORD:?set PG_ADMIN_PASSWORD in .env, see .env.example}
+      PGPASSWORD_STANDBY: ${PG_REPLICATION_PASSWORD:?set PG_REPLICATION_PASSWORD in .env, see .env.example}
+      ALLOW_NOSSL: "true"
+      # Advertised by hostname, not IP: see player-db-1 (#236).
+      SPILO_CONFIGURATION: |
+        bootstrap:
+          dcs:
+            postgresql:
+              parameters:
+                max_prepared_transactions: 64
+        restapi:
+          connect_address: session-db-1:8008
+        postgresql:
+          connect_address: session-db-1:5432
+          parameters:
+            shared_buffers: 128MB
+            max_prepared_transactions: 64
     volumes:
-      - session_db_data:/var/lib/postgresql/data
-      - ./db/session-service/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - session_db_1_data:/home/postgres/pgdata
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${SESSION_DB_USER} -d ${SESSION_DB_NAME}"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8008/health', timeout=2)"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 30
+      start_period: 30s
+    depends_on:
+      etcd:
+        condition: service_healthy
+
+  session-db-2:
+    <<: *session-db
+    hostname: session-db-2
+    environment:
+      <<: *session-db-env
+      SPILO_CONFIGURATION: |
+        bootstrap:
+          dcs:
+            postgresql:
+              parameters:
+                max_prepared_transactions: 64
+        restapi:
+          connect_address: session-db-2:8008
+        postgresql:
+          connect_address: session-db-2:5432
+          parameters:
+            shared_buffers: 128MB
+            max_prepared_transactions: 64
+    volumes:
+      - session_db_2_data:/home/postgres/pgdata
+
+  session-db-3:
+    <<: *session-db
+    hostname: session-db-3
+    environment:
+      <<: *session-db-env
+      SPILO_CONFIGURATION: |
+        bootstrap:
+          dcs:
+            postgresql:
+              parameters:
+                max_prepared_transactions: 64
+        restapi:
+          connect_address: session-db-3:8008
+        postgresql:
+          connect_address: session-db-3:5432
+          parameters:
+            shared_buffers: 128MB
+            max_prepared_transactions: 64
+    volumes:
+      - session_db_3_data:/home/postgres/pgdata
+
+  # Creates the app role and database and runs init.sql once, through the leader port
+  # (db/postgres-ha/init-app-db.sh, same job as player-db-init).
+  session-db-init:
+    image: postgres:16-alpine
+    restart: "no"
+    command: ["sh", "/init-app-db.sh"]
+    environment:
+      SERVICE_NAME: session-db-init
+      PGHOST: pg-router
+      PGPORT: 5402
+      PGUSER: postgres
+      PGPASSWORD: ${PG_SUPERUSER_PASSWORD:?set PG_SUPERUSER_PASSWORD in .env, see .env.example}
+      APP_DB_USER: ${SESSION_DB_USER}
+      APP_DB_PASSWORD: ${SESSION_DB_PASSWORD}
+      APP_DB_NAME: ${SESSION_DB_NAME}
+      ETL_READER_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
+    volumes:
+      - ./db/postgres-ha/init-app-db.sh:/init-app-db.sh:ro
+      - ./db/session-service/init.sql:/init-sql/init.sql:ro
+    depends_on:
+      pg-router:
+        condition: service_healthy
+      session-db-1:
+        condition: service_healthy
+      session-db-2:
+        condition: service_healthy
+      session-db-3:
+        condition: service_healthy
 
   # ==================== Applicant Service (Ciprian) ====================
   applicant-service:
-    image: ciprik13/applicant-service:4.0.0
+    image: ciprik13/applicant-service:5.0.0
     restart: unless-stopped
     # Lab 3, grade 5: two instances, sharing applicant-db (STORE_DRIVER mongo).
     deploy:
@@ -325,8 +614,11 @@ services:
       PORT: 3003
       STORE_DRIVER: mongo
       DECEPTIVE_RATE: ${APPLICANT_DECEPTIVE_RATE:-0.35}
-      DB_HOST: applicant-db
-      DB_PORT: 27017
+      # Lab 5, grade 5: the replica set rs-applicant. DB_HOSTS replaces DB_HOST/DB_PORT; the
+      # service builds mongodb://…@<DB_HOSTS>/<DB_NAME>?replicaSet=…&authSource=admin
+      # &retryWrites=true&w=majority, so the driver follows the primary on failover.
+      DB_HOSTS: applicant-db-1:27017,applicant-db-2:27017,applicant-db-3:27017
+      DB_REPLICA_SET: rs-applicant
       DB_USER: ${APPLICANT_DB_USER}
       DB_PASSWORD: ${APPLICANT_DB_PASSWORD}
       DB_NAME: ${APPLICANT_DB_NAME}
@@ -359,30 +651,86 @@ services:
       # Lab 4, grade 8: GetRecord goes to University Record over gRPC through the Broker.
       GRPC_DEPENDENCIES: "university-record-service"
     depends_on:
-      applicant-db:
-        condition: service_healthy
+      # The init job, not a member: a healthy mongod is not yet a writable set.
+      applicant-db-rs-init:
+        condition: service_completed_successfully
       service-discovery:
         condition: service_started
 
-  applicant-db:
+  # applicant-db: three mongod members forming the replica set rs-applicant (Lab 5, grade 5), copied
+  # from Liviu's discord-dms-db template (see that cluster for why only member -1 has
+  # MONGO_INITDB_* and init.js). Member -1 also gets ETL_READER_PASSWORD, which
+  # init.js uses to create the read-only etl_reader.
+  applicant-db-1: &applicant-db
     image: mongo:7
     restart: unless-stopped
+    hostname: applicant-db-1
+    entrypoint: ["sh", "/mongod-rs.sh"]
     environment:
+      SERVICE_NAME: applicant-db-1
+      RS_NAME: rs-applicant
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?set MONGO_REPLICA_KEY in .env, see .env.example}
       MONGO_INITDB_ROOT_USERNAME: ${APPLICANT_DB_USER}
       MONGO_INITDB_ROOT_PASSWORD: ${APPLICANT_DB_PASSWORD}
       MONGO_INITDB_DATABASE: ${APPLICANT_DB_NAME}
+      ETL_READER_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
     volumes:
-      - applicant_db_data:/data/db
+      - applicant_db_1_data:/data/db
+      - ./db/mongo-rs/mongod-rs.sh:/mongod-rs.sh:ro
       - ./db/applicant-service/init.js:/docker-entrypoint-initdb.d/init.js:ro
     healthcheck:
       test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\""]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 30
+      start_period: 20s
+
+  applicant-db-2:
+    <<: *applicant-db
+    hostname: applicant-db-2
+    environment:
+      SERVICE_NAME: applicant-db-2
+      RS_NAME: rs-applicant
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?set MONGO_REPLICA_KEY in .env, see .env.example}
+    volumes:
+      - applicant_db_2_data:/data/db
+      - ./db/mongo-rs/mongod-rs.sh:/mongod-rs.sh:ro
+
+  applicant-db-3:
+    <<: *applicant-db
+    hostname: applicant-db-3
+    environment:
+      SERVICE_NAME: applicant-db-3
+      RS_NAME: rs-applicant
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?set MONGO_REPLICA_KEY in .env, see .env.example}
+    volumes:
+      - applicant_db_3_data:/data/db
+      - ./db/mongo-rs/mongod-rs.sh:/mongod-rs.sh:ro
+
+  # One-shot rs.initiate(); exits 0 on a set that is already initiated.
+  applicant-db-rs-init:
+    image: mongo:7
+    restart: "no"
+    command: ["sh", "/init-replica-set.sh"]
+    environment:
+      SERVICE_NAME: applicant-db-rs-init
+      RS_NAME: rs-applicant
+      RS_MEMBERS: applicant-db-1:27017,applicant-db-2:27017,applicant-db-3:27017
+      MONGO_ROOT_USERNAME: ${APPLICANT_DB_USER}
+      MONGO_ROOT_PASSWORD: ${APPLICANT_DB_PASSWORD}
+    volumes:
+      - ./db/mongo-rs/init-replica-set.sh:/init-replica-set.sh:ro
+    depends_on:
+      applicant-db-1:
+        condition: service_healthy
+      applicant-db-2:
+        condition: service_healthy
+      applicant-db-3:
+        condition: service_healthy
 
   # ==================== Credential Service (Ciprian) ====================
   credential-service:
-    image: ciprik13/credential-service:4.0.0
+    image: ciprik13/credential-service:5.0.0
     restart: unless-stopped
     # Lab 3, grade 5: two instances, sharing credential-db (STORE_DRIVER mongo).
     deploy:
@@ -397,8 +745,11 @@ services:
       # Unset would mean every request that needs Applicant Service answers
       # 503 DEPENDENCY_UNAVAILABLE even though the real service is running here.
       APPLICANT_SERVICE_URL: http://message-broker:3011/applicant
-      DB_HOST: credential-db
-      DB_PORT: 27017
+      # Lab 5, grade 5: the replica set rs-credential. DB_HOSTS replaces DB_HOST/DB_PORT; the
+      # service builds mongodb://…@<DB_HOSTS>/<DB_NAME>?replicaSet=…&authSource=admin
+      # &retryWrites=true&w=majority, so the driver follows the primary on failover.
+      DB_HOSTS: credential-db-1:27017,credential-db-2:27017,credential-db-3:27017
+      DB_REPLICA_SET: rs-credential
       DB_USER: ${CREDENTIAL_DB_USER}
       DB_PASSWORD: ${CREDENTIAL_DB_PASSWORD}
       DB_NAME: ${CREDENTIAL_DB_NAME}
@@ -427,30 +778,86 @@ services:
       # Lab 4, grade 8: Applicant is called over gRPC (GetApplicant) through the Broker.
       BROKER_GRPC_URL: message-broker:50011
     depends_on:
-      credential-db:
-        condition: service_healthy
+      # The init job, not a member: a healthy mongod is not yet a writable set.
+      credential-db-rs-init:
+        condition: service_completed_successfully
       service-discovery:
         condition: service_started
 
-  credential-db:
+  # credential-db: three mongod members forming the replica set rs-credential (Lab 5, grade 5), copied
+  # from Liviu's discord-dms-db template (see that cluster for why only member -1 has
+  # MONGO_INITDB_* and init.js). Member -1 also gets ETL_READER_PASSWORD, which
+  # init.js uses to create the read-only etl_reader.
+  credential-db-1: &credential-db
     image: mongo:7
     restart: unless-stopped
+    hostname: credential-db-1
+    entrypoint: ["sh", "/mongod-rs.sh"]
     environment:
+      SERVICE_NAME: credential-db-1
+      RS_NAME: rs-credential
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?set MONGO_REPLICA_KEY in .env, see .env.example}
       MONGO_INITDB_ROOT_USERNAME: ${CREDENTIAL_DB_USER}
       MONGO_INITDB_ROOT_PASSWORD: ${CREDENTIAL_DB_PASSWORD}
       MONGO_INITDB_DATABASE: ${CREDENTIAL_DB_NAME}
+      ETL_READER_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
     volumes:
-      - credential_db_data:/data/db
+      - credential_db_1_data:/data/db
+      - ./db/mongo-rs/mongod-rs.sh:/mongod-rs.sh:ro
       - ./db/credential-service/init.js:/docker-entrypoint-initdb.d/init.js:ro
     healthcheck:
       test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\""]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 30
+      start_period: 20s
+
+  credential-db-2:
+    <<: *credential-db
+    hostname: credential-db-2
+    environment:
+      SERVICE_NAME: credential-db-2
+      RS_NAME: rs-credential
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?set MONGO_REPLICA_KEY in .env, see .env.example}
+    volumes:
+      - credential_db_2_data:/data/db
+      - ./db/mongo-rs/mongod-rs.sh:/mongod-rs.sh:ro
+
+  credential-db-3:
+    <<: *credential-db
+    hostname: credential-db-3
+    environment:
+      SERVICE_NAME: credential-db-3
+      RS_NAME: rs-credential
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?set MONGO_REPLICA_KEY in .env, see .env.example}
+    volumes:
+      - credential_db_3_data:/data/db
+      - ./db/mongo-rs/mongod-rs.sh:/mongod-rs.sh:ro
+
+  # One-shot rs.initiate(); exits 0 on a set that is already initiated.
+  credential-db-rs-init:
+    image: mongo:7
+    restart: "no"
+    command: ["sh", "/init-replica-set.sh"]
+    environment:
+      SERVICE_NAME: credential-db-rs-init
+      RS_NAME: rs-credential
+      RS_MEMBERS: credential-db-1:27017,credential-db-2:27017,credential-db-3:27017
+      MONGO_ROOT_USERNAME: ${CREDENTIAL_DB_USER}
+      MONGO_ROOT_PASSWORD: ${CREDENTIAL_DB_PASSWORD}
+    volumes:
+      - ./db/mongo-rs/init-replica-set.sh:/init-replica-set.sh:ro
+    depends_on:
+      credential-db-1:
+        condition: service_healthy
+      credential-db-2:
+        condition: service_healthy
+      credential-db-3:
+        condition: service_healthy
 
   # ==================== Server Rules Service (Ion) ====================
   server-rules-service:
-    image: ion190/server-rules-service:4.0.1
+    image: ion190/server-rules-service:5.0.0
     restart: unless-stopped
     deploy:
       replicas: ${RULES_REPLICAS:-2}
@@ -458,8 +865,10 @@ services:
       PORT: 3005
       GRPC_PORT: 50005
       GRPC_HOST: 0.0.0.0
-      DB_HOST: rules-db
-      DB_PORT: 27017
+      # Lab 5: connect to every member and let the MongoDB driver
+      # discover the current primary after a replica-set election.
+      DB_HOSTS: rules-db-1:27017,rules-db-2:27017,rules-db-3:27017
+      DB_REPLICA_SET: rs-rules
       DB_USER: ${RULES_DB_USER}
       DB_PASSWORD: ${RULES_DB_PASSWORD}
       DB_NAME: ${RULES_DB_NAME}
@@ -473,30 +882,87 @@ services:
       SERVICE_DISCOVERY_URL: http://service-discovery:3010
       SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
     depends_on:
-      rules-db:
-        condition: service_healthy
+      # Wait for the one-shot job to initiate rs-rules and observe a PRIMARY.
+      rules-db-rs-init:
+        condition: service_completed_successfully
       service-discovery:
         condition: service_started
 
-  rules-db:
+  # rules-db: three MongoDB members forming rs-rules.
+  # The first member initializes the root user, seed rules, and ETL read-only user.
+  rules-db-1: &rules-db
     image: mongo:7
     restart: unless-stopped
+    hostname: rules-db-1
+    entrypoint: ["sh", "/mongod-rs.sh"]
     environment:
+      SERVICE_NAME: rules-db-1
+      RS_NAME: rs-rules
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?set MONGO_REPLICA_KEY in .env, see .env.example}
+      MONGO_WT_CACHE_GB: "0.25"
       MONGO_INITDB_ROOT_USERNAME: ${RULES_DB_USER}
       MONGO_INITDB_ROOT_PASSWORD: ${RULES_DB_PASSWORD}
       MONGO_INITDB_DATABASE: ${RULES_DB_NAME}
+      ETL_READER_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
     volumes:
-      - rules_db_data:/data/db
+      - rules_db_1_data:/data/db
+      - ./db/mongo-rs/mongod-rs.sh:/mongod-rs.sh:ro
       - ./db/server-rules-service/init.js:/docker-entrypoint-initdb.d/init.js:ro
     healthcheck:
       test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\""]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+      interval: 10s
+      timeout: 30s
+      retries: 30
+      start_period: 60s
+
+  rules-db-2:
+    <<: *rules-db
+    hostname: rules-db-2
+    environment:
+      SERVICE_NAME: rules-db-2
+      RS_NAME: rs-rules
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?set MONGO_REPLICA_KEY in .env, see .env.example}
+      MONGO_WT_CACHE_GB: "0.25"
+    volumes:
+      - rules_db_2_data:/data/db
+      - ./db/mongo-rs/mongod-rs.sh:/mongod-rs.sh:ro
+
+  rules-db-3:
+    <<: *rules-db
+    hostname: rules-db-3
+    environment:
+      SERVICE_NAME: rules-db-3
+      RS_NAME: rs-rules
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?set MONGO_REPLICA_KEY in .env, see .env.example}
+      MONGO_WT_CACHE_GB: "0.25"
+    volumes:
+      - rules_db_3_data:/data/db
+      - ./db/mongo-rs/mongod-rs.sh:/mongod-rs.sh:ro
+
+  # One-shot rs.initiate(); waits for all members and a writable PRIMARY.
+  rules-db-rs-init:
+    image: mongo:7
+    restart: "no"
+    command: ["sh", "/init-replica-set.sh"]
+    environment:
+      SERVICE_NAME: rules-db-rs-init
+      RS_NAME: rs-rules
+      RS_MEMBERS: rules-db-1:27017,rules-db-2:27017,rules-db-3:27017
+      MONGO_ROOT_USERNAME: ${RULES_DB_USER}
+      MONGO_ROOT_PASSWORD: ${RULES_DB_PASSWORD}
+    volumes:
+      - ./db/mongo-rs/init-replica-set.sh:/init-replica-set.sh:ro
+    depends_on:
+      rules-db-1:
+        condition: service_healthy
+      rules-db-2:
+        condition: service_healthy
+      rules-db-3:
+        condition: service_healthy
 
   # ==================== University Record Service (Ion) ====================
   university-record-service:
-    image: ion190/university-record-service:4.0.0
+    image: ion190/university-record-service:5.0.0
     restart: unless-stopped
     deploy:
       replicas: ${UNIVERSITY_RECORD_REPLICAS:-2}
@@ -504,8 +970,8 @@ services:
       PORT: 3006
       GRPC_PORT: 50006
       GRPC_HOST: 0.0.0.0
-      DB_HOST: university-record-db
-      DB_PORT: 5432
+      DB_HOST: pg-router
+      DB_PORT: 5406
       DB_USER: ${UNIVERSITY_RECORD_DB_USER}
       DB_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
       DB_NAME: ${UNIVERSITY_RECORD_DB_NAME}
@@ -517,30 +983,108 @@ services:
       SD_HEARTBEAT_MS: ${SD_HEARTBEAT_MS:-10000}
       SD_TOPICS: applicant.created
     depends_on:
-      university-record-db:
-        condition: service_healthy
+      university-record-db-init:
+        condition: service_completed_successfully
       service-discovery:
         condition: service_started
 
-  university-record-db:
-    image: postgres:16-alpine
+  # ==================== University Record PostgreSQL HA (Ion) ====================
+  # Three Spilo nodes share one Patroni scope and elect a leader through etcd.
+  # The application connects through pg-router:5406; replicas are available at 5506.
+  university-record-db-1: &university-record-db
+    image: ghcr.io/zalando/spilo-16:3.3-p1
     restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${UNIVERSITY_RECORD_DB_USER}
-      POSTGRES_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
-      POSTGRES_DB: ${UNIVERSITY_RECORD_DB_NAME}
+    hostname: university-record-db-1
+    environment: &university-record-db-env
+      SCOPE: university-record-db
+      PGVERSION: "16"
+      ETCD3_HOST: etcd:2379
+      SPILO_PROVIDER: local
+      PGPASSWORD_SUPERUSER: ${PG_SUPERUSER_PASSWORD:?set PG_SUPERUSER_PASSWORD in .env, see .env.example}
+      PGPASSWORD_ADMIN: ${PG_ADMIN_PASSWORD:?set PG_ADMIN_PASSWORD in .env, see .env.example}
+      PGPASSWORD_STANDBY: ${PG_REPLICATION_PASSWORD:?set PG_REPLICATION_PASSWORD in .env, see .env.example}
+      ALLOW_NOSSL: "true"
+      # Per node, advertised by hostname: see player-db-1.
+      SPILO_CONFIGURATION: |
+        restapi:
+          connect_address: university-record-db-1:8008
+        postgresql:
+          connect_address: university-record-db-1:5432
+          parameters:
+            shared_buffers: 128MB
     volumes:
-      - university_record_db_data:/var/lib/postgresql/data
-      - ./db/university-record-service/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - university_record_db_1_data:/home/postgres/pgdata
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${UNIVERSITY_RECORD_DB_USER} -d ${UNIVERSITY_RECORD_DB_NAME}"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8008/health', timeout=2)"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 30
+      start_period: 30s
+    depends_on:
+      etcd:
+        condition: service_healthy
+
+  university-record-db-2:
+    <<: *university-record-db
+    hostname: university-record-db-2
+    environment:
+      <<: *university-record-db-env
+      SPILO_CONFIGURATION: |
+        restapi:
+          connect_address: university-record-db-2:8008
+        postgresql:
+          connect_address: university-record-db-2:5432
+          parameters:
+            shared_buffers: 128MB
+    volumes:
+      - university_record_db_2_data:/home/postgres/pgdata
+
+  university-record-db-3:
+    <<: *university-record-db
+    hostname: university-record-db-3
+    environment:
+      <<: *university-record-db-env
+      SPILO_CONFIGURATION: |
+        restapi:
+          connect_address: university-record-db-3:8008
+        postgresql:
+          connect_address: university-record-db-3:5432
+          parameters:
+            shared_buffers: 128MB
+    volumes:
+      - university_record_db_3_data:/home/postgres/pgdata
+
+  # Idempotent application-role, database, init-SQL and ETL-reader setup.
+  university-record-db-init:
+    image: postgres:16-alpine
+    restart: "no"
+    command: ["sh", "/init-app-db.sh"]
+    environment:
+      SERVICE_NAME: university-record-db-init
+      PGHOST: pg-router
+      PGPORT: 5406
+      PGUSER: postgres
+      PGPASSWORD: ${PG_SUPERUSER_PASSWORD:?set PG_SUPERUSER_PASSWORD in .env, see .env.example}
+      APP_DB_USER: ${UNIVERSITY_RECORD_DB_USER}
+      APP_DB_PASSWORD: ${UNIVERSITY_RECORD_DB_PASSWORD}
+      APP_DB_NAME: ${UNIVERSITY_RECORD_DB_NAME}
+      ETL_READER_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
+    volumes:
+      - ./db/postgres-ha/init-app-db.sh:/init-app-db.sh:ro
+      - ./db/university-record-service/init.sql:/init-sql/init.sql:ro
+    depends_on:
+      pg-router:
+        condition: service_healthy
+      university-record-db-1:
+        condition: service_healthy
+      university-record-db-2:
+        condition: service_healthy
+      university-record-db-3:
+        condition: service_healthy
 
   # ==================== Moderation Service (Liviu) ====================
   moderation-service:
-    image: d3adeye/moderation-service:4.0.0
+    image: d3adeye/moderation-service:5.0.0
     restart: unless-stopped
     # Lab 3, grade 5: two instances. Each registers its own container hostname with
     # Service Discovery, so there is no fixed host port and no container_name. The
@@ -580,38 +1124,160 @@ services:
       GRPC_DEPENDENCIES: "applicant-service,credential-service,server-rules-service,university-record-service"
       # Lab 3, grade 3: DEBUG, INFO, WARN or ERROR.
       LOG_LEVEL: ${MODERATION_LOG_LEVEL:-INFO}
-      DB_HOST: moderation-db
-      DB_PORT: 5432
+      # Lab 5, grade 5: pg-router's leader port, so a failover moves the writes to the
+      # new leader without the service knowing. Host and port only: no code change.
+      DB_HOST: pg-router
+      DB_PORT: 5407
       DB_USER: ${MODERATION_DB_USER}
       DB_PASSWORD: ${MODERATION_DB_PASSWORD}
       DB_NAME: ${MODERATION_DB_NAME}
+      # Lab 5, grade 8: a decision is a two-phase commit moderation.decision, run by the
+      # Broker's coordinator, with Session applying it to the score. This service serves
+      # tx.v1.Participant on GRPC_PORT (registered as grpcUrl) and gives the coordinator
+      # TX_TIMEOUT_MS, under TASK_TIMEOUT_MS. TX_MODE=local is the Lab 4 behaviour.
+      GRPC_PORT: 50007
+      TX_MODE: 2pc
+      TX_TIMEOUT_MS: 6000
     depends_on:
-      moderation-db:
-        condition: service_healthy
+      # Not the nodes but the init job: a healthy Patroni node is not yet a database
+      # with the application role, the schema and etl_reader in it.
+      moderation-db-init:
+        condition: service_completed_successfully
       service-discovery:
         condition: service_started
       message-broker:
         condition: service_started
 
-  moderation-db:
-    image: postgres:16-alpine
+  # moderation-db: three Spilo nodes (Patroni + PostgreSQL 16), one leader and two
+  # streaming replicas, reached through pg-router on 5407 (leader) and 5507 (replicas).
+  # Copied from player-db, so see that cluster for what each variable does.
+  moderation-db-1: &moderation-db
+    image: ghcr.io/zalando/spilo-16:3.3-p1
     restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${MODERATION_DB_USER}
-      POSTGRES_PASSWORD: ${MODERATION_DB_PASSWORD}
-      POSTGRES_DB: ${MODERATION_DB_NAME}
+    hostname: moderation-db-1
+    environment: &moderation-db-env
+      SCOPE: moderation-db
+      PGVERSION: "16"
+      ETCD3_HOST: etcd:2379
+      SPILO_PROVIDER: local
+      PGPASSWORD_SUPERUSER: ${PG_SUPERUSER_PASSWORD:?set PG_SUPERUSER_PASSWORD in .env, see .env.example}
+      PGPASSWORD_ADMIN: ${PG_ADMIN_PASSWORD:?set PG_ADMIN_PASSWORD in .env, see .env.example}
+      PGPASSWORD_STANDBY: ${PG_REPLICATION_PASSWORD:?set PG_REPLICATION_PASSWORD in .env, see .env.example}
+      ALLOW_NOSSL: "true"
+      # Per node, so SPILO_CONFIGURATION is overridden on -2 and -3 rather than shared.
+      #
+      # connect_address: every node is advertised by its compose hostname, not its IP,
+      # as in the player-db and university-record-db clusters. A container can come
+      # back on a different IP after `docker compose stop` + `up`, and the stale IP in
+      # etcd then points the members at the wrong container, so replicas stop streaming
+      # and nothing is promoted.
+      #
+      # Lab 5, grade 8: this cluster takes part in the two-phase commit, so it needs
+      # prepared transactions, which PostgreSQL disables by default. Set twice on
+      # purpose: under bootstrap.dcs for a cluster initialised from scratch, and under
+      # postgresql for a node joining an already bootstrapped one. A node without it
+      # refuses PREPARE TRANSACTION, so a decision would abort whenever that node
+      # happened to be the leader.
+      SPILO_CONFIGURATION: |
+        bootstrap:
+          dcs:
+            postgresql:
+              parameters:
+                max_prepared_transactions: 64
+        restapi:
+          connect_address: moderation-db-1:8008
+        postgresql:
+          connect_address: moderation-db-1:5432
+          parameters:
+            shared_buffers: 128MB
+            max_prepared_transactions: 64
     volumes:
-      - moderation_db_data:/var/lib/postgresql/data
-      - ./db/moderation-service/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - moderation_db_1_data:/home/postgres/pgdata
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${MODERATION_DB_USER} -d ${MODERATION_DB_NAME}"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8008/health', timeout=2)"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 30
+      start_period: 30s
+    depends_on:
+      etcd:
+        condition: service_healthy
+
+  moderation-db-2:
+    <<: *moderation-db
+    hostname: moderation-db-2
+    environment:
+      <<: *moderation-db-env
+      SPILO_CONFIGURATION: |
+        bootstrap:
+          dcs:
+            postgresql:
+              parameters:
+                max_prepared_transactions: 64
+        restapi:
+          connect_address: moderation-db-2:8008
+        postgresql:
+          connect_address: moderation-db-2:5432
+          parameters:
+            shared_buffers: 128MB
+            max_prepared_transactions: 64
+    volumes:
+      - moderation_db_2_data:/home/postgres/pgdata
+
+  moderation-db-3:
+    <<: *moderation-db
+    hostname: moderation-db-3
+    environment:
+      <<: *moderation-db-env
+      SPILO_CONFIGURATION: |
+        bootstrap:
+          dcs:
+            postgresql:
+              parameters:
+                max_prepared_transactions: 64
+        restapi:
+          connect_address: moderation-db-3:8008
+        postgresql:
+          connect_address: moderation-db-3:5432
+          parameters:
+            shared_buffers: 128MB
+            max_prepared_transactions: 64
+    volumes:
+      - moderation_db_3_data:/home/postgres/pgdata
+
+  # Idempotent application-role, database, init-SQL and ETL-reader setup, through the
+  # leader port. Spilo bootstraps PostgreSQL itself, so the image never runs
+  # /docker-entrypoint-initdb.d and init.sql has to be applied from outside.
+  moderation-db-init:
+    image: postgres:16-alpine
+    restart: "no"
+    command: ["sh", "/init-app-db.sh"]
+    environment:
+      SERVICE_NAME: moderation-db-init
+      PGHOST: pg-router
+      PGPORT: 5407
+      PGUSER: postgres
+      PGPASSWORD: ${PG_SUPERUSER_PASSWORD:?set PG_SUPERUSER_PASSWORD in .env, see .env.example}
+      APP_DB_USER: ${MODERATION_DB_USER}
+      APP_DB_PASSWORD: ${MODERATION_DB_PASSWORD}
+      APP_DB_NAME: ${MODERATION_DB_NAME}
+      ETL_READER_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
+    volumes:
+      - ./db/postgres-ha/init-app-db.sh:/init-app-db.sh:ro
+      - ./db/moderation-service/init.sql:/init-sql/init.sql:ro
+    depends_on:
+      pg-router:
+        condition: service_healthy
+      moderation-db-1:
+        condition: service_healthy
+      moderation-db-2:
+        condition: service_healthy
+      moderation-db-3:
+        condition: service_healthy
 
   # ==================== Discord DMs Service (Liviu) ====================
   discord-dms-service:
-    image: d3adeye/discord-dms-service:4.0.0
+    image: d3adeye/discord-dms-service:5.0.0
     restart: unless-stopped
     # One instance on purpose (Lab 3, grade 5): 3008 is published to the host, and a
     # message sent to one replica would not reach sockets connected to another.
@@ -624,7 +1290,10 @@ services:
     environment:
       WS_PORT: 3008
       HTTP_PORT: 3009
-      MONGODB_URI: mongodb://${DISCORD_DMS_DB_USER}:${DISCORD_DMS_DB_PASSWORD}@discord-dms-db:27017/?authSource=admin
+      # Lab 5, grade 5: every member of the set, so the driver keeps writing after a
+      # failover. w=majority is what makes an acknowledged write survive losing the
+      # primary, which is the point of replicating at all.
+      MONGODB_URI: mongodb://${DISCORD_DMS_DB_USER}:${DISCORD_DMS_DB_PASSWORD}@discord-dms-db-1:27017,discord-dms-db-2:27017,discord-dms-db-3:27017/?replicaSet=rs-discord-dms&authSource=admin&retryWrites=true&w=majority
       MONGODB_DATABASE: ${DISCORD_DMS_DB_NAME}
       SESSION_SERVICE_URL: http://message-broker:3011/session
       WS_TICKET_SECRET: ${WS_TICKET_SECRET:-}
@@ -657,28 +1326,198 @@ services:
       # Lab 3, grade 3: DEBUG, INFO, WARN or ERROR.
       LOG_LEVEL: ${DISCORD_DMS_LOG_LEVEL:-INFO}
     depends_on:
-      discord-dms-db:
-        condition: service_healthy
+      # Not the members but the init job: a healthy mongod is not yet a replica set,
+      # and the service's first write needs a primary.
+      discord-dms-db-rs-init:
+        condition: service_completed_successfully
       service-discovery:
         condition: service_started
       message-broker:
         condition: service_started
 
-  discord-dms-db:
+  # discord-dms-db: three mongod members forming the replica set rs-discord-dms, one
+  # primary and two secondaries. The template for the other Mongo clusters: copy the
+  # three members and the -rs-init job, then change RS_NAME, the hostnames, the
+  # volumes, the init.js mount and the DISCORD_DMS_DB_* values.
+  #
+  # Only member -1 carries MONGO_INITDB_ROOT_* and the init.js mount, because the
+  # image runs them against an empty data directory and the set then replicates the
+  # users, the database and its indexes to the others. Giving the same variables to
+  # -2 and -3 would have them bootstrap their own standalone users, which is what
+  # makes rs.initiate() fail. That is also why -2 and -3 repeat only the two
+  # variables every member needs rather than inheriting the whole block.
+  discord-dms-db-1: &discord-dms-db
     image: mongo:7
     restart: unless-stopped
+    hostname: discord-dms-db-1
+    # The keyfile for internal authentication is written inside the container,
+    # because mongod refuses a keyfile that is group- or world-readable.
+    entrypoint: ["sh", "/mongod-rs.sh"]
     environment:
+      SERVICE_NAME: discord-dms-db-1
+      RS_NAME: rs-discord-dms
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?set MONGO_REPLICA_KEY in .env, see .env.example}
       MONGO_INITDB_ROOT_USERNAME: ${DISCORD_DMS_DB_USER}
       MONGO_INITDB_ROOT_PASSWORD: ${DISCORD_DMS_DB_PASSWORD}
       MONGO_INITDB_DATABASE: ${DISCORD_DMS_DB_NAME}
+      ETL_READER_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
     volumes:
-      - discord_dms_db_data:/data/db
+      - discord_dms_db_1_data:/data/db
+      - ./db/mongo-rs/mongod-rs.sh:/mongod-rs.sh:ro
       - ./db/discord-dms-service/init.js:/docker-entrypoint-initdb.d/init.js:ro
     healthcheck:
       test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\""]
       interval: 5s
       timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  discord-dms-db-2:
+    <<: *discord-dms-db
+    hostname: discord-dms-db-2
+    environment:
+      SERVICE_NAME: discord-dms-db-2
+      RS_NAME: rs-discord-dms
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?set MONGO_REPLICA_KEY in .env, see .env.example}
+    volumes:
+      - discord_dms_db_2_data:/data/db
+      - ./db/mongo-rs/mongod-rs.sh:/mongod-rs.sh:ro
+
+  discord-dms-db-3:
+    <<: *discord-dms-db
+    hostname: discord-dms-db-3
+    environment:
+      SERVICE_NAME: discord-dms-db-3
+      RS_NAME: rs-discord-dms
+      MONGO_REPLICA_KEY: ${MONGO_REPLICA_KEY:?set MONGO_REPLICA_KEY in .env, see .env.example}
+    volumes:
+      - discord_dms_db_3_data:/data/db
+      - ./db/mongo-rs/mongod-rs.sh:/mongod-rs.sh:ro
+
+  # mongod --replSet does not form a set by itself: exactly one rs.initiate() names
+  # the members. This one-shot job does it, waits for a primary, and exits 0 on a
+  # set that is already initiated, so it runs on every `up`. The service waits for
+  # it with service_completed_successfully, so it never starts against a set that
+  # cannot accept writes.
+  discord-dms-db-rs-init:
+    image: mongo:7
+    restart: "no"
+    command: ["sh", "/init-replica-set.sh"]
+    environment:
+      SERVICE_NAME: discord-dms-db-rs-init
+      RS_NAME: rs-discord-dms
+      RS_MEMBERS: discord-dms-db-1:27017,discord-dms-db-2:27017,discord-dms-db-3:27017
+      MONGO_ROOT_USERNAME: ${DISCORD_DMS_DB_USER}
+      MONGO_ROOT_PASSWORD: ${DISCORD_DMS_DB_PASSWORD}
+    volumes:
+      - ./db/mongo-rs/init-replica-set.sh:/init-replica-set.sh:ro
+    depends_on:
+      discord-dms-db-1:
+        condition: service_healthy
+      discord-dms-db-2:
+        condition: service_healthy
+      discord-dms-db-3:
+        condition: service_healthy
+
+  # ==================== Data Warehouse (Mihaela, Lab 5) ====================
+  # Lab 5, grade 4: the analytics database, filled by the etl job from every service's
+  # database (db/warehouse/init.sql holds the star schema). Not published, and not
+  # replicated: everything in it can be rebuilt from the service databases.
+  warehouse-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${WAREHOUSE_DB_USER}
+      POSTGRES_PASSWORD: ${WAREHOUSE_DB_PASSWORD}
+      POSTGRES_DB: ${WAREHOUSE_DB_NAME}
+    volumes:
+      - warehouse_db_data:/var/lib/postgresql/data
+      - ./db/warehouse/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${WAREHOUSE_DB_USER} -d ${WAREHOUSE_DB_NAME}"]
+      interval: 5s
+      timeout: 5s
       retries: 5
+
+  # ==================== ETL (Mihaela, Lab 5) ====================
+  # Lab 5, grade 4: the job that copies every service database into warehouse-db,
+  # every ETL_INTERVAL_S seconds (etl/etl.py; one pass with `python etl.py --once`).
+  # It reads with each service's own database user but over read-only sessions
+  # (PostgreSQL) or from a secondary (MongoDB), so it can never change a source.
+  # A plain python image with the script mounted: no image of our own to build.
+  etl:
+    image: python:3.12-slim
+    restart: unless-stopped
+    working_dir: /etl
+    # etl/start.sh installs the packages into the etl_deps volume once (again only when
+    # requirements.txt changes), so restarts need no network.
+    command: ["sh", "start.sh"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: /deps
+      ETL_INTERVAL_S: ${ETL_INTERVAL_S:-60}
+      LOG_LEVEL: ${ETL_LOG_LEVEL:-INFO}
+      WAREHOUSE_DB_HOST: warehouse-db
+      WAREHOUSE_DB_USER: ${WAREHOUSE_DB_USER}
+      WAREHOUSE_DB_PASSWORD: ${WAREHOUSE_DB_PASSWORD}
+      WAREHOUSE_DB_NAME: ${WAREHOUSE_DB_NAME}
+      # player-db is a Spilo cluster since #226: read a replica through pg-router.
+      PLAYER_DB_HOST: pg-router
+      PLAYER_DB_PORT: "5501"
+      # Lab 5: the read-only role player-db-init creates (SELECT only), not Player's own user.
+      PLAYER_DB_USER: etl_reader
+      PLAYER_DB_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
+      PLAYER_DB_NAME: ${PLAYER_DB_NAME}
+      SESSION_DB_HOST: pg-router
+      SESSION_DB_PORT: "5502"
+      SESSION_DB_USER: etl_reader
+      SESSION_DB_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
+      SESSION_DB_NAME: ${SESSION_DB_NAME}
+      # University Record Spilo replicas: ETL uses the read-only replica endpoint.
+      UNIVERSITY_RECORD_DB_HOST: pg-router
+      UNIVERSITY_RECORD_DB_PORT: "5506"
+      UNIVERSITY_RECORD_DB_USER: etl_reader
+      UNIVERSITY_RECORD_DB_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
+      UNIVERSITY_RECORD_DB_NAME: ${UNIVERSITY_RECORD_DB_NAME}
+      MODERATION_DB_HOST: pg-router
+      MODERATION_DB_PORT: "5507"
+      # Lab 5: the read-only role moderation-db-init creates (SELECT only), not
+      # Moderation's own user, and a replica port so the analytics reads never
+      # compete with the decisions being written on the leader.
+      MODERATION_DB_USER: etl_reader
+      MODERATION_DB_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
+      MODERATION_DB_NAME: ${MODERATION_DB_NAME}
+      APPLICANT_DB_HOSTS: applicant-db-1:27017,applicant-db-2:27017,applicant-db-3:27017
+      APPLICANT_DB_REPLICA_SET: rs-applicant
+      # Lab 5: the read-only etl_reader (role read on this database only).
+      APPLICANT_DB_USER: etl_reader
+      APPLICANT_DB_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
+      APPLICANT_DB_NAME: ${APPLICANT_DB_NAME}
+      CREDENTIAL_DB_HOSTS: credential-db-1:27017,credential-db-2:27017,credential-db-3:27017
+      CREDENTIAL_DB_REPLICA_SET: rs-credential
+      # Lab 5: the read-only etl_reader (role read on this database only).
+      CREDENTIAL_DB_USER: etl_reader
+      CREDENTIAL_DB_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
+      CREDENTIAL_DB_NAME: ${CREDENTIAL_DB_NAME}
+      RULES_DB_HOSTS: rules-db-1:27017,rules-db-2:27017,rules-db-3:27017
+      RULES_DB_REPLICA_SET: rs-rules
+      # Read from a secondary with a database-scoped read-only account.
+      RULES_DB_USER: etl_reader
+      RULES_DB_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
+      RULES_DB_NAME: ${RULES_DB_NAME}
+      DISCORD_DMS_DB_HOSTS: discord-dms-db-1:27017,discord-dms-db-2:27017,discord-dms-db-3:27017
+      DISCORD_DMS_DB_REPLICA_SET: rs-discord-dms
+      # Lab 5: the read-only etl_reader (role read on this database only).
+      DISCORD_DMS_DB_USER: etl_reader
+      DISCORD_DMS_DB_PASSWORD: ${ETL_READER_PASSWORD:?set ETL_READER_PASSWORD in .env, see .env.example}
+      DISCORD_DMS_DB_NAME: ${DISCORD_DMS_DB_NAME}
+    volumes:
+      - ./etl:/etl:ro
+      - etl_deps:/deps
+    depends_on:
+      warehouse-db:
+        condition: service_healthy
 
 volumes:
   alloy_data:
@@ -686,11 +1525,34 @@ volumes:
   loki_data:
   prometheus_data:
   grafana_data:
-  player_db_data:
-  session_db_data:
-  applicant_db_data:
-  credential_db_data:
+  etcd_data:
+  player_db_1_data:
+  player_db_2_data:
+  player_db_3_data:
+  session_db_1_data:
+  session_db_2_data:
+  session_db_3_data:
+  applicant_db_1_data:
+  applicant_db_2_data:
+  applicant_db_3_data:
+  credential_db_1_data:
+  credential_db_2_data:
+  credential_db_3_data:
+  # Legacy standalone Rules DB volume retained for backup/migration.
   rules_db_data:
+  rules_db_1_data:
+  rules_db_2_data:
+  rules_db_3_data:
+  university_record_db_1_data:
+  university_record_db_2_data:
+  university_record_db_3_data:
+  # Legacy standalone database volume; retained for backup and migration recovery.
   university_record_db_data:
-  moderation_db_data:
-  discord_dms_db_data:
+  moderation_db_1_data:
+  moderation_db_2_data:
+  moderation_db_3_data:
+  discord_dms_db_1_data:
+  discord_dms_db_2_data:
+  discord_dms_db_3_data:
+  warehouse_db_data:
+  etl_deps:

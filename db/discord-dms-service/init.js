@@ -7,6 +7,9 @@
 //
 // The indexes use the same keys, names and options as the service's own
 // EnsureIndexes, so the service finds them already in place on boot.
+//
+// Every step checks before it writes, so the script can also be run by hand
+// against a volume that already exists, to add what a newer version brings.
 
 const target = db.getSiblingDB(process.env.MONGO_INITDB_DATABASE || 'discord_dms');
 
@@ -53,4 +56,22 @@ if (target.channels.countDocuments() === 0) {
     { channelId: channels['general-mod-chat'], senderId: 'moderation-service',
       content: 'Applicant applicant-1003: ban was wrong, the evidence called for flag (-20).', createdAt: minutesAgo(4) },
   ]);
+}
+
+// Lab 5, grade 4: the read-only user the ETL job reads this database with, through
+// the replica set's secondaries. Created in admin (the ETL authenticates with
+// authSource=admin) with role read on this database only, so the warehouse load
+// can never write here. Skipped when ETL_READER_PASSWORD is unset (a standalone run
+// of this script); the password is never printed.
+const etlReaderPassword = process.env.ETL_READER_PASSWORD;
+if (etlReaderPassword) {
+  const adminDb = db.getSiblingDB('admin');
+  if (!adminDb.getUser('etl_reader')) {
+    adminDb.createUser({
+      user: 'etl_reader',
+      pwd: etlReaderPassword,
+      roles: [{ role: 'read', db: target.getName() }],
+    });
+  }
+  print('etl_reader ready (read on ' + target.getName() + ')');
 }

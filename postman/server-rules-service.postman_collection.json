@@ -220,7 +220,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"applicantId\": \"{{applicantId}}\",\n  \"applicant\": {\n    \n    \"previousBan\": false\n  }\n}"
+          "raw": "{\n  \"applicantId\": \"{{applicantId}}\",\n  \"applicant\": {\n    \n    \"previouslyBanned\": false\n  }\n}"
         },
         "url": {
           "raw": "{{baseUrl}}/rules/evaluate",
@@ -257,7 +257,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"applicantId\": \"{{applicantId}}\",\n  \"applicant\": {\n    \"role\": \"other\",\n    \"previousBan\": true\n  }\n}"
+          "raw": "{\n  \"applicantId\": \"{{applicantId}}\",\n  \"applicant\": {\n    \"role\": \"other\",\n    \"previouslyBanned\": true\n  }\n}"
         },
         "url": {
           "raw": "{{baseUrl}}/rules/evaluate",

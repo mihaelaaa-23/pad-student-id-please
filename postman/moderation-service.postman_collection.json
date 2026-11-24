@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "9c4e7a12-8b03-4d55-a1e6-2f7b5c9d0e02",
     "name": "Moderation Service",
-    "description": "Every HTTP endpoint of the Moderation Service (Team 18, PAD project \"Student ID, Please\"), ordered as a walkthrough of one shift: seed three applicants, call them, look the calls up, revise one of them, read the shift summary, then clean up.\n\nRun it top to bottom with the Collection Runner against a running stack (`docker compose up -d`). Each request asserts its own status code, and the ids are passed between requests through collection variables.\n\n**Setup** creates its own applicants, because Moderation only judges applicants that really exist: `POST /moderation/decide` answers `404 NOT_FOUND` for an unknown id. Each applicant gets a profile in Applicant Service, a university record in University Record Service and a credential from Credential Service, which is what the four dependencies are then asked about:\n\n- the **clean** applicant is enrolled, never banned and holds an honest credential\n- the **forged** applicant holds a credential issued with `scenario: fake_student_id`, so it comes back `valid: false` with `FORGED_SIGNATURE`\n- the **banned** applicant has a university record with `previouslyBanned: true`\n\nThe verdict assertions are deliberately about internal consistency - `correct` agrees with `decision == expectedDecision`, a correct call costs nothing, a wrong one costs something - rather than hardcoding a verdict per applicant. That way the collection stays green while the dependencies' own rules change. At the time of writing Server Rules Service reports `NO_PREVIOUS_BAN` as violated for every applicant, which makes `expectedDecision` `ban` for all three; once that is fixed the clean applicant scores `accept` and the forged one `reject`, and these same assertions still hold.\n\nThe collection is re-runnable: the first request under **Decisions** gives each run its own `sessionId` (`shift-<timestamp>`), because the service records one decision per applicant per session and would otherwise answer `409` on a second run. **Cleanup** removes the applicants and records it created, so re-running does not pile them up.",
+    "description": "Every HTTP endpoint of the Moderation Service (Team 18, PAD project \"Student ID, Please\"), ordered as a walkthrough of one shift: seed three applicants, open a shift, call them, look the calls up, revise one of them, read the shift summary, then clean up.\n\nRun it top to bottom with the Collection Runner against a running stack (`docker compose up -d`). Each request asserts its own status code, and the ids are passed between requests through collection variables.\n\n**Setup** creates its own applicants, because Moderation only judges applicants that really exist: `POST /moderation/decide` answers `404 NOT_FOUND` for an unknown id. Each applicant gets a profile in Applicant Service, a university record in University Record Service and a credential from Credential Service, which is what the four dependencies are then asked about:\n\n- the **clean** applicant is enrolled, never banned and holds an honest credential\n- the **forged** applicant holds a credential issued with `scenario: fake_student_id`, so it comes back `valid: false` with `FORGED_SIGNATURE`\n- the **banned** applicant has a university record with `previouslyBanned: true`\n\nThe verdict assertions are deliberately about internal consistency - `correct` agrees with `decision == expectedDecision`, a correct call costs nothing, a wrong one costs something - rather than hardcoding a verdict per applicant. That way the collection stays green while the dependencies' own rules change. At the time of writing Server Rules Service reports `NO_PREVIOUS_BAN` as violated for every applicant, which makes `expectedDecision` `ban` for all three; once that is fixed the clean applicant scores `accept` and the forged one `reject`, and these same assertions still hold.\n\n**Setup** also opens a shift in Session Service. Since Lab 5 a decision is a two-phase commit between Moderation and Session (`TX_MODE=2pc`): Session applies it to the shift's score, and votes no for a shift it does not know, which turns the decision into `409 TX_ABORTED`. So the shift has to be real, and every run opens its own, because the service records one decision per applicant per session and would otherwise answer `409` on a second run.\n\n**Cleanup** ends the shift and removes the applicants and records it created, so re-running does not pile them up.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -37,8 +37,12 @@
       "value": "http://localhost:3000/player"
     },
     {
+      "key": "sessionUrl",
+      "value": "http://localhost:3000/session"
+    },
+    {
       "key": "sessionId",
-      "value": "shift-001"
+      "value": ""
     },
     {
       "key": "moderatorId",
@@ -557,6 +561,46 @@
               }
             }
           ]
+        },
+        {
+          "name": "Open a shift",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('the shift is open', function () {",
+                  "    pm.response.to.have.status(201);",
+                  "    pm.expect(pm.response.json().status).to.eql('active');",
+                  "});",
+                  "// Every run gets its own shift: the service records one decision per applicant",
+                  "// per session, so a second run on the same shift would answer 409 where the",
+                  "// requests below expect 201.",
+                  "pm.collectionVariables.set('sessionId', pm.response.json().sessionId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{sessionUrl}}/sessions",
+              "host": ["{{sessionUrl}}"],
+              "path": ["sessions"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"moderatorId\": \"{{playerId}}\"\n}"
+            },
+            "description": "Since Lab 5 a decision is a two-phase commit between Moderation and Session (`TX_MODE=2pc`): Session applies it to the shift's score and votes no, `409 TX_ABORTED`, for a shift it does not know. So the decisions below are taken on a real shift opened here."
+          }
         }
       ]
     },
@@ -619,18 +663,6 @@
             "description": "The moderator lets an enrolled student in. The service gathers the applicant's profile, credentials, the current rules and the university records - all four at once - and agrees with the call, so nothing is deducted."
           },
           "event": [
-            {
-              "listen": "prerequest",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "// Give every run its own shift. The service records one decision per",
-                  "// applicant per session, so a second run against a fixed sessionId would",
-                  "// answer 409 where the requests below expect 201.",
-                  "pm.collectionVariables.set('sessionId', 'shift-' + Date.now());"
-                ]
-              }
-            },
             {
               "listen": "test",
               "script": {
@@ -1181,6 +1213,27 @@
               }
             }
           ]
+        },
+        {
+          "name": "End the shift",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('the shift is over', function () { pm.response.to.have.status(200); });"]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{sessionUrl}}/sessions/{{sessionId}}/end",
+              "host": ["{{sessionUrl}}"],
+              "path": ["sessions", "{{sessionId}}", "end"]
+            }
+          }
         },
         {
           "name": "Delete the clean applicant's university record",
