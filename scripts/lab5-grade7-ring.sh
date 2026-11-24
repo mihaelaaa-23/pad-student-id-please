@@ -80,7 +80,7 @@ show "for i in \$(seq 1 $KEYS); do curl -s -o /dev/null -D - \"$BASE_URL/applica
 read_all "$TMP_DIR/warm.txt"
 echo "First read (X-Cache, node):"
 tally "$TMP_DIR/warm.txt"
-grep -qv ' MISS ' "$TMP_DIR/warm.txt" && die "the first read of a fresh key must be a MISS"
+awk '$2 != "MISS"' "$TMP_DIR/warm.txt" | grep -q . && die "the first read of a fresh key must be a MISS"
 ON_STOPPED="$(awk -v n="$STOPPED_NODE" '$3 == n' "$TMP_DIR/warm.txt" | wc -l | tr -d ' ')"
 (( ON_STOPPED > 0 )) || die "no key landed on $STOPPED_NODE"
 ok "$KEYS entries stored, $ON_STOPPED of them on $STOPPED_NODE"
@@ -95,15 +95,21 @@ read_all "$TMP_DIR/after.txt"
 echo "Second read, with $STOPPED_NODE stopped (X-Cache, node):"
 tally "$TMP_DIR/after.txt"
 
-python3 - "$TMP_DIR/warm.txt" "$TMP_DIR/after.txt" "$STOPPED_NODE" <<'PY'
+python3 - "$TMP_DIR/warm.txt" "$TMP_DIR/after.txt" "$STOPPED_NODE" "${RING_FAILOPEN_TOLERANCE:-2}" <<'PY'
 import sys
-warm = {l.split()[0]: l.split() for l in open(sys.argv[1])}
-after = {l.split()[0]: l.split() for l in open(sys.argv[2])}
-stopped = sys.argv[3]
+# A line is "i X-Cache [X-Cache-Node]"; the node is missing when the Gateway failed open
+# (a cache call over CACHE_TIMEOUT_MS, 50 ms, is a MISS without a node, never an error).
+def parse(path):
+    return {l.split()[0]: (l.split() + ["", ""])[:3] for l in open(path) if l.strip()}
+warm, after = parse(sys.argv[1]), parse(sys.argv[2])
+stopped, tolerance = sys.argv[3], int(sys.argv[4])
 bad = []
-others_hit = moved_miss = 0
+others_hit = moved_miss = fail_open = 0
 for key, (_, _, node_before) in warm.items():
-    cache, node_after = after[key][1], (after[key][2] if len(after[key]) > 2 else "")
+    _, cache, node_after = after[key]
+    if node_before == "" or (cache == "MISS" and node_after == "" and node_before != stopped):
+        fail_open += 1
+        continue
     if node_before == stopped:
         if cache != "MISS":
             bad.append("k=%s was on %s but answered %s" % (key, stopped, cache))
@@ -116,6 +122,9 @@ for key, (_, _, node_before) in warm.items():
             others_hit += 1
 print("keys on the other nodes still HIT on the same node: %d" % others_hit)
 print("keys of the stopped node that MISS (re-stored on the next node of the ring): %d, the rest missed while it was being ejected" % moved_miss)
+print("keys that failed open (a cache call over 50 ms, MISS without a node): %d, %d allowed" % (fail_open, tolerance))
+if fail_open > tolerance:
+    bad.append("%d keys failed open, more than the %d allowed" % (fail_open, tolerance))
 if bad:
     print("unexpected:")
     print("\n".join("  " + b for b in bad[:10]))
